@@ -1,0 +1,6 @@
+[submodule "unix"]
+	path = unix
+	url = https://github.com/prometheus/node_exporter
+[submodule "windows"]
+	path = windows
+	url = https://github.com/prometheus-community/windows_exporter
