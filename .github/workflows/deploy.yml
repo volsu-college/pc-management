@@ -117,9 +117,7 @@ jobs:
           to: ${{ secrets.TELEGRAM_CHAT }}
           token: ${{ secrets.TELEGRAM_TOKEN }}
           message: |
-            🚀 New Release: ${{ github.ref_name }}
+            Обновление конфигурации ПК: ${{ github.ref_name }}
             
-            📋 Templated setup script has been prepared with your credentials
-            
-            Release: ${{ github.server_url }}/${{ github.repository }}/releases/tag/${{ github.ref_name }}
+            Выпущенная версия: ${{ github.server_url }}/${{ github.repository }}/releases/tag/${{ github.ref_name }}
           document: /tmp/setup-templated.sh
