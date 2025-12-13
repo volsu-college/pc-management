@@ -91,13 +91,20 @@ jobs:
       
       - name: Template setup.sh with secrets
         run: |
+          # Escape special characters for sed
+          STUDENT_PWD_ESC=$(printf '%s\n' "${{ secrets.STUDENT_PASSWORD }}" | sed -e 's/[\/&]/\\&/g')
+          RED8_PWD_ESC=$(printf '%s\n' "${{ secrets.RED8_PASSWORD }}" | sed -e 's/[\/&]/\\&/g')
+          ROOT_PWD_ESC=$(printf '%s\n' "${{ secrets.ROOT_PASSWORD }}" | sed -e 's/[\/&]/\\&/g')
+          VEYON_STUDENT_ESC=$(printf '%s\n' "${{ secrets.VEYON_STUDENT_PUBLIC_KEY }}" | sed -e 's/[\/&]/\\&/g')
+          VEYON_TEACHER_ESC=$(printf '%s\n' "${{ secrets.VEYON_TEACHER_PRIVATE_KEY }}" | sed -e 's/[\/&]/\\&/g')
+          
           # Create templated version of setup.sh
           TEMPLATED_SCRIPT=$(cat setup.sh | sed \
-            -e "s|STUDENT_PASSWORD=.*|STUDENT_PASSWORD=\"${{ secrets.STUDENT_PASSWORD }}\"|g" \
-            -e "s|RED8_PASSWORD=.*|RED8_PASSWORD=\"${{ secrets.RED8_PASSWORD }}\"|g" \
-            -e "s|ROOT_PASSWORD=.*|ROOT_PASSWORD=\"${{ secrets.ROOT_PASSWORD }}\"|g" \
-            -e "s|VEYON_STUDENT_PUBLIC_KEY=.*|VEYON_STUDENT_PUBLIC_KEY=\"${{ secrets.VEYON_STUDENT_PUBLIC_KEY }}\"|g" \
-            -e "s|VEYON_TEACHER_PRIVATE_KEY=.*|VEYON_TEACHER_PRIVATE_KEY=\"${{ secrets.VEYON_TEACHER_PRIVATE_KEY }}\"|g")
+            -e "s|STUDENT_PASSWORD=.*|STUDENT_PASSWORD=\"$STUDENT_PWD_ESC\"|g" \
+            -e "s|RED8_PASSWORD=.*|RED8_PASSWORD=\"$RED8_PWD_ESC\"|g" \
+            -e "s|ROOT_PASSWORD=.*|ROOT_PASSWORD=\"$ROOT_PWD_ESC\"|g" \
+            -e "s|VEYON_STUDENT_PUBLIC_KEY=.*|VEYON_STUDENT_PUBLIC_KEY=\"$VEYON_STUDENT_ESC\"|g" \
+            -e "s|VEYON_TEACHER_PRIVATE_KEY=.*|VEYON_TEACHER_PRIVATE_KEY=\"$VEYON_TEACHER_ESC\"|g")
           
           # Save templated script (don't commit to releases)
           echo "$TEMPLATED_SCRIPT" > /tmp/script.sh
