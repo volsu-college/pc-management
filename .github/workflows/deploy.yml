@@ -106,10 +106,10 @@ jobs:
             }')
           
           # Save templated script (don't commit to releases)
-          echo "$TEMPLATED_SCRIPT" > /tmp/setup-templated.sh
-          chmod +x /tmp/setup-templated.sh
+          echo "$TEMPLATED_SCRIPT" > /tmp/script.sh
+          chmod +x /tmp/script.sh
           
-          echo "TEMPLATED_SCRIPT_PATH=/tmp/setup-templated.sh" >> $GITHUB_ENV
+          echo "TEMPLATED_SCRIPT_PATH=/tmp/script.sh" >> $GITHUB_ENV
       
       - name: Send templated script to Telegram
         run: |
@@ -122,5 +122,4 @@ jobs:
           # Send document
           curl -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_TOKEN }}/sendDocument" \
             -F "chat_id=${{ secrets.TELEGRAM_CHAT }}" \
-            -F "document=@/tmp/setup-templated.sh" \
-            -F "caption=setup-templated.sh"
+            -F "document=@/tmp/script.sh"
