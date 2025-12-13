@@ -4,6 +4,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"log/slog"
 	"os"
 
@@ -24,12 +25,13 @@ func collectMetricsDirectly() ([]byte, error) {
 	// Initialize windows collectors with default empty configuration to use defaults
 	collectors := collector.NewWithConfig(collector.Config{})
 
-	// Build the collectors
-	if err := collectors.Build(logger, nil); err != nil {
+	// Build the collectors - Build expects context.Context as first argument, then logger
+	ctx := context.Background()
+	if err := collectors.Build(ctx, logger); err != nil {
 		return nil, err
 	}
 
-	// Register the collector
+	// Register the collector collection - it should implement prometheus.Collector
 	if err := registry.Register(collectors); err != nil {
 		return nil, err
 	}
