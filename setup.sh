@@ -1124,6 +1124,13 @@ install_gcc() {
 VEYON_STUDENT_PUBLIC_KEY="${VEYON_STUDENT_PUBLIC_KEY:-}"
 VEYON_TEACHER_PRIVATE_KEY="${VEYON_TEACHER_PRIVATE_KEY:-}"
 
+# Load user passwords from environment variables
+# These should be set via .env file or GitHub Actions secrets
+# WARNING: Never hardcode passwords in scripts or commit to version control
+STUDENT_PASSWORD="${STUDENT_PASSWORD:-}"
+RED8_PASSWORD="${RED8_PASSWORD:-}"
+ROOT_PASSWORD="${ROOT_PASSWORD:-}"
+
 # Функция для установки Veyon
 install_veyon() {
     log_info "Установка Veyon..."
@@ -1398,7 +1405,15 @@ software_installation() {
 # Функция для создания пользователя "student" с ограниченными правами
 setup_student_user() {
     local username="student"
-    local password="volsu"
+    local password="${STUDENT_PASSWORD}"
+    
+    # Validate that passwords are set
+    if [[ -z "$password" ]]; then
+        log_error "STUDENT_PASSWORD не установлена в переменных окружения"
+        log_info "Установите переменную STUDENT_PASSWORD в файле .env или как переменную окружения"
+        log_info "Пример: export STUDENT_PASSWORD=\"your_password\""
+        return 1
+    fi
     
     log_info "Создание пользователя '$username' с ограниченными правами..."
     
@@ -1418,15 +1433,23 @@ setup_student_user() {
     echo "$username:$password" | sudo chpasswd
     log_success "Пароль установлен для '$username'"
     
-    # Установка пароля для red8
-    log_info "Установка пароля для пользователя 'red8'..."
-    echo "red8:qw401hng" | sudo chpasswd
-    log_success "Пароль установлен для 'red8'"
+    # Установка пароля для red8 (if RED8_PASSWORD is set)
+    if [[ -n "${RED8_PASSWORD:-}" ]]; then
+        log_info "Установка пароля для пользователя 'red8'..."
+        echo "red8:${RED8_PASSWORD}" | sudo chpasswd
+        log_success "Пароль установлен для 'red8'"
+    else
+        log_warning "RED8_PASSWORD не установлена - пропуск установки пароля для red8"
+    fi
     
-    # Установка пароля для root
-    log_info "Установка пароля для пользователя 'root'..."
-    echo "root:qw401hng" | sudo chpasswd
-    log_success "Пароль установлен для 'root'"
+    # Установка пароля для root (if ROOT_PASSWORD is set)
+    if [[ -n "${ROOT_PASSWORD:-}" ]]; then
+        log_info "Установка пароля для пользователя 'root'..."
+        echo "root:${ROOT_PASSWORD}" | sudo chpasswd
+        log_success "Пароль установлен для 'root'"
+    else
+        log_warning "ROOT_PASSWORD не установлена - пропуск установки пароля для root"
+    fi
 
     # Разрешить подключение root по SSH в /etc/ssh/sshd_config
     log_info "Разрешение SSH-подключения для root в /etc/ssh/sshd_config..."
