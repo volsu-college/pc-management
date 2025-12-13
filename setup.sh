@@ -7,6 +7,20 @@
 
 set -euo pipefail
 
+# Function to load environment variables from .env file
+load_env_file() {
+    local env_file="${1:-.env}"
+    if [[ -f "$env_file" ]]; then
+        log_info "Loading environment variables from $env_file"
+        # shellcheck disable=SC2086
+        set -a
+        # shellcheck disable=SC1090
+        source "$env_file"
+        set +a
+        log_success "Environment variables loaded"
+    fi
+}
+
 # Color codes for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -35,6 +49,64 @@ log_error() {
 # РАЗДЕЛ УПРАВЛЕНИЯ ПРОКСИ
 ################################################################################
 
+# Вспомогательная функция для установки прокси для конкретного пользователя
+set_proxy_for_user() {
+    local proxy_url="$1"
+    local target_user="$2"
+    local user_home
+    
+    # Получаем домашний каталог пользователя
+    user_home=$(eval echo "~${target_user}")
+    
+    if [[ ! -d "$user_home" ]]; then
+        log_warning "Домашний каталог для пользователя $target_user не найден: $user_home"
+        return 1
+    fi
+    
+    local bashrc_path="${user_home}/.bashrc"
+    log_info "Конфигурирование прокси для пользователя $target_user в $bashrc_path..."
+
+    # Удалить ранее созданный блок прокси между маркерами если он есть, затем добавить новый помеченный блок
+    # Это позволяет безопасно обновлять все переменные прокси в одном месте
+    if [[ -f "$bashrc_path" ]]; then
+        sudo sed -i '/^# >>> VOLSU_PROXY_START/,/^# <<< VOLSU_PROXY_END/d' "$bashrc_path" || true
+    else
+        # Создаем файл .bashrc если его нет
+        sudo touch "$bashrc_path"
+        sudo chown "${target_user}:${target_user}" "$bashrc_path"
+    fi
+
+    # Добавляем прокси блок в .bashrc
+    {
+        echo "# >>> VOLSU_PROXY_START"
+        echo "# Конфигурация прокси для volsu-pc-management"
+        echo "export HTTP_PROXY=\"$proxy_url\""
+        echo "export HTTPS_PROXY=\"$proxy_url\""
+        echo "export http_proxy=\"$proxy_url\""
+        echo "export https_proxy=\"$proxy_url\""
+        echo "export FTP_PROXY=\"$proxy_url\""
+        echo "export ftp_proxy=\"$proxy_url\""
+        echo "# <<< VOLSU_PROXY_END"
+    } | sudo tee -a "$bashrc_path" > /dev/null
+
+    log_success "Параметры прокси записаны в $bashrc_path для пользователя $target_user"
+    
+    # Конфигурирование прокси для rsync
+    local rsync_conf="${user_home}/.rsync"
+    if [[ ! -d "$rsync_conf" ]]; then
+        sudo mkdir -p "$rsync_conf"
+        sudo chown "${target_user}:${target_user}" "$rsync_conf"
+    fi
+    
+    # Создаем конфигурацию rsync
+    {
+        echo "# Конфигурация прокси для rsync"
+        echo "proxy=$proxy_url"
+    } | sudo tee "$rsync_conf/rsync.conf" > /dev/null
+    sudo chown "${target_user}:${target_user}" "$rsync_conf/rsync.conf"
+    log_success "Прокси для rsync настроен для пользователя $target_user"
+}
+
 # Функция установки прокси
 set_proxy() {
     local proxy_url="$1"
@@ -54,62 +126,33 @@ set_proxy() {
         log_warning "Файл конфигурации DNF не найден в /etc/dnf/dnf.conf"
     fi
     
-    # Установка прокси в .bashrc для переменной окружения HTTP_PROXY
-    log_info "Конфигурирование прокси для .bashrc..."
-    bashrc_path="${HOME}/.bashrc"
+    # Определяем текущего пользователя
+    local current_user="${USER}"
     
-    # Удаление существующих параметров прокси если они есть
-    sed -i '/^export HTTP_PROXY=/d' "$bashrc_path"
-    sed -i '/^export HTTPS_PROXY=/d' "$bashrc_path"
-    sed -i '/^export http_proxy=/d' "$bashrc_path"
-    sed -i '/^export https_proxy=/d' "$bashrc_path"
+    # Если скрипт запущен через sudo, получаем реального пользователя
+    if [[ -n "${SUDO_USER:-}" ]]; then
+        current_user="${SUDO_USER}"
+        log_info "Скрипт запущен через sudo, настройка прокси для пользователя: $current_user"
+    fi
     
-    # Добавление новых параметров прокси
-    cat >> "$bashrc_path" <<EOF
-
-# Конфигурация прокси
-export HTTP_PROXY="$proxy_url"
-export HTTPS_PROXY="$proxy_url"
-export http_proxy="$proxy_url"
-export https_proxy="$proxy_url"
-EOF
+    # Установка прокси для текущего пользователя
+    set_proxy_for_user "$proxy_url" "$current_user"
+    
+    # Если скрипт запущен через sudo, также настроить прокси для пользователя student
+    if [[ -n "${SUDO_USER:-}" ]] && id "student" &>/dev/null && [[ "$current_user" != "student" ]]; then
+        log_info "Настройка прокси также для пользователя student..."
+        set_proxy_for_user "$proxy_url" "student"
+    fi
     
     # Экспорт в текущую оболочку
     export HTTP_PROXY="$proxy_url"
     export HTTPS_PROXY="$proxy_url"
     export http_proxy="$proxy_url"
     export https_proxy="$proxy_url"
-    
-    # Конфигурирование прокси для rsync
-    log_info "Конфигурирование прокси для rsync..."
-    rsync_conf="${HOME}/.rsync"
-    mkdir -p "$rsync_conf"
-    cat > "$rsync_conf/rsync.conf" <<EOF
-# Конфигурация прокси для rsync
-proxy=$proxy_url
-EOF
-    log_success "Прокси для rsync настроен"
-    
-    # Конфигурирование прокси для ftp
-    log_info "Конфигурирование прокси для ftp..."
-    
-    # Удаление существующих параметров ftp прокси если они есть
-    sed -i '/^export ftp_proxy=/d' "$bashrc_path"
-    sed -i '/^export FTP_PROXY=/d' "$bashrc_path"
-    
-    # Добавление параметров прокси для ftp
-    cat >> "$bashrc_path" <<EOF
-
-# Конфигурация прокси для FTP
-export FTP_PROXY="$proxy_url"
-export ftp_proxy="$proxy_url"
-EOF
-    
-    # Экспорт FTP прокси в текущую оболочку
     export FTP_PROXY="$proxy_url"
     export ftp_proxy="$proxy_url"
-    
-    log_success "Прокси для FTP настроен"
+
+    log_success "Прокси применены в текущей сессии"
 
     # Конфигурирование прокси для snap
     log_info "Конфигурирование прокси для snap..."
@@ -146,8 +189,46 @@ EOF
         log_warning "Snap недоступен: пропуск конфигурирования прокси для snap"
     fi
     
-    log_success "Параметры прокси применены к .bashrc"
-    log_success "Конфигурация прокси завершена. Пожалуйста, выполните: source ~/.bashrc"
+    log_success "Конфигурация прокси завершена"
+    if [[ -n "${SUDO_USER:-}" ]]; then
+        log_info "Прокси настроен для пользователей: $current_user"
+        if id "student" &>/dev/null && [[ "$current_user" != "student" ]]; then
+            log_info "  и student"
+        fi
+        log_info "Пользователи должны выполнить: source ~/.bashrc"
+    else
+        log_info "Пожалуйста, выполните: source ~/.bashrc"
+    fi
+}
+
+# Вспомогательная функция для отключения прокси для конкретного пользователя
+disable_proxy_for_user() {
+    local target_user="$1"
+    local user_home
+    
+    # Получаем домашний каталог пользователя
+    user_home=$(eval echo "~${target_user}")
+    
+    if [[ ! -d "$user_home" ]]; then
+        log_warning "Домашний каталог для пользователя $target_user не найден: $user_home"
+        return 1
+    fi
+    
+    local bashrc_path="${user_home}/.bashrc"
+    log_info "Удаление прокси для пользователя $target_user из $bashrc_path..."
+    
+    # Удаление помеченного блока прокси
+    if [[ -f "$bashrc_path" ]]; then
+        sudo sed -i '/^# >>> VOLSU_PROXY_START/,/^# <<< VOLSU_PROXY_END/d' "$bashrc_path" || true
+        log_success "Прокси удален из $bashrc_path для пользователя $target_user"
+    fi
+    
+    # Удаление конфигурации rsync
+    local rsync_conf="${user_home}/.rsync"
+    if [[ -f "$rsync_conf/rsync.conf" ]]; then
+        sudo rm -f "$rsync_conf/rsync.conf"
+        log_success "Конфигурация rsync удалена для пользователя $target_user"
+    fi
 }
 
 # Функция отключения прокси
@@ -160,20 +241,22 @@ disable_proxy() {
         log_success "Прокси удален из конфигурации DNF"
     fi
     
-    # Удаление прокси из .bashrc
-    bashrc_path="${HOME}/.bashrc"
-    sed -i '/^export HTTP_PROXY=/d' "$bashrc_path"
-    sed -i '/^export HTTPS_PROXY=/d' "$bashrc_path"
-    sed -i '/^export http_proxy=/d' "$bashrc_path"
-    sed -i '/^export https_proxy=/d' "$bashrc_path"
-    sed -i '/^export FTP_PROXY=/d' "$bashrc_path"
-    sed -i '/^export ftp_proxy=/d' "$bashrc_path"
+    # Определяем текущего пользователя
+    local current_user="${USER}"
     
-    # Удаление конфигурации rsync
-    rsync_conf="${HOME}/.rsync"
-    if [[ -f "$rsync_conf/rsync.conf" ]]; then
-        rm -f "$rsync_conf/rsync.conf"
-        log_success "Конфигурация rsync удалена"
+    # Если скрипт запущен через sudo, получаем реального пользователя
+    if [[ -n "${SUDO_USER:-}" ]]; then
+        current_user="${SUDO_USER}"
+        log_info "Скрипт запущен через sudo, удаление прокси для пользователя: $current_user"
+    fi
+    
+    # Отключение прокси для текущего пользователя
+    disable_proxy_for_user "$current_user"
+    
+    # Если скрипт запущен через sudo, также отключить прокси для пользователя student
+    if [[ -n "${SUDO_USER:-}" ]] && id "student" &>/dev/null && [[ "$current_user" != "student" ]]; then
+        log_info "Удаление прокси также для пользователя student..."
+        disable_proxy_for_user "student"
     fi
     
     # Отмена установки в текущей оболочке
@@ -193,7 +276,15 @@ disable_proxy() {
     fi
     
     log_success "Конфигурация прокси отключена"
-    log_info "Пожалуйста, выполните: source ~/.bashrc"
+    if [[ -n "${SUDO_USER:-}" ]]; then
+        log_info "Прокси удален для пользователей: $current_user"
+        if id "student" &>/dev/null && [[ "$current_user" != "student" ]]; then
+            log_info "  и student"
+        fi
+        log_info "Пользователи должны выполнить: source ~/.bashrc"
+    else
+        log_info "Пожалуйста, выполните: source ~/.bashrc"
+    fi
 }
 
 # Функция для отображения статуса прокси
@@ -430,10 +521,29 @@ proxy_management() {
                 echo -n "Введите IP адрес прокси (например, 10.10.9.1): "
                 read -r proxy_ip
                 proxy_url="http://${proxy_ip}:3127"
-                set_proxy "$proxy_url"
+                
+                # Проверка, требуется ли sudo для настройки нескольких пользователей
+                if [[ "${USER}" == "red8" ]] && [[ -z "${SUDO_USER:-}" ]]; then
+                    log_info "Для настройки прокси для пользователей red8 и student требуются права sudo"
+                    # Устанавливаем SUDO_USER для функции set_proxy
+                    export SUDO_USER="${USER}"
+                    set_proxy "$proxy_url"
+                    unset SUDO_USER
+                else
+                    set_proxy "$proxy_url"
+                fi
                 ;;
             2)
-                disable_proxy
+                # Проверка, требуется ли sudo для отключения прокси для нескольких пользователей
+                if [[ "${USER}" == "red8" ]] && [[ -z "${SUDO_USER:-}" ]]; then
+                    log_info "Для отключения прокси для пользователей red8 и student требуются права sudo"
+                    # Устанавливаем SUDO_USER для функции disable_proxy
+                    export SUDO_USER="${USER}"
+                    disable_proxy
+                    unset SUDO_USER
+                else
+                    disable_proxy
+                fi
                 ;;
             3)
                 show_proxy_status
@@ -639,11 +749,13 @@ install_libvirt() {
             log_error "Ошибка при запуске службы libvirtd"
             return 1
         fi
-        
-        # Добавление текущего пользователя в группу libvirt
-        log_info "Добавление пользователя в группу libvirt..."
-        sudo usermod -a -G libvirt "$USER"
-        log_success "Пользователь добавлен в группу libvirt"
+
+        if command -v virsh &> /dev/null; then
+             # Добавление текущего пользователя в группу libvirt
+            log_info "Добавление пользователя в группу libvirt..."
+            sudo usermod -a -G libvirt "$USER"
+            log_success "Пользователь добавлен в группу libvirt"
+        fi
         
         # Настройка прав доступа к сокетам libvirt
         log_info "Конфигурирование прав доступа к сокетам libvirt..."
@@ -796,6 +908,158 @@ check_fix_libvirt_rights() {
     fi
 }
 
+# Функция для отладки polkit правил
+debug_polkit_rules() {
+    log_info "=== ОТЛАДКА POLKIT ПРАВИЛ ==="
+    
+    # 1. Проверка установки polkit
+    log_info "1. Проверка установки polkit..."
+    if command -v pkaction &> /dev/null; then
+        log_success "polkit установлен"
+        pkaction --version
+    else
+        log_error "polkit не установлен!"
+        return 1
+    fi
+    
+    # 2. Проверка службы polkit
+    log_info "2. Проверка службы polkit..."
+    if systemctl is-active --quiet polkit; then
+        log_success "Служба polkit активна"
+    else
+        log_warning "Служба polkit не активна"
+        sudo systemctl status polkit || true
+    fi
+    
+    # 3. Проверка файлов правил
+    log_info "3. Проверка файлов правил в /etc/polkit-1/rules.d/..."
+    if [[ -d /etc/polkit-1/rules.d/ ]]; then
+        local rules_count=$(ls -1 /etc/polkit-1/rules.d/*.rules 2>/dev/null | wc -l)
+        if [[ $rules_count -gt 0 ]]; then
+            log_success "Найдено файлов правил: $rules_count"
+            ls -lh /etc/polkit-1/rules.d/*.rules
+        else
+            log_warning "Файлы правил не найдены"
+        fi
+    else
+        log_error "Директория /etc/polkit-1/rules.d/ не существует"
+    fi
+    
+    # 4. Проверка конкретного файла для student
+    log_info "4. Проверка правил для student..."
+    local student_rules="/etc/polkit-1/rules.d/50-libvirt-student.rules"
+    if [[ -f "$student_rules" ]]; then
+        log_success "Файл $student_rules существует"
+        echo "Содержимое файла:"
+        cat "$student_rules"
+        
+        # Проверка синтаксиса JavaScript
+        log_info "Проверка синтаксиса правил..."
+        if command -v js &> /dev/null || command -v nodejs &> /dev/null || command -v node &> /dev/null; then
+            local js_cmd="node"
+            if ! command -v node &> /dev/null; then
+                js_cmd="nodejs"
+            fi
+            if ! command -v $js_cmd &> /dev/null; then
+                js_cmd="js"
+            fi
+            
+            if $js_cmd -c "$(cat $student_rules)" 2>&1; then
+                log_success "Синтаксис правил корректен"
+            else
+                log_error "Ошибка синтаксиса в правилах!"
+            fi
+        else
+            log_warning "JavaScript интерпретатор не найден, пропуск проверки синтаксиса"
+        fi
+    else
+        log_error "Файл $student_rules не найден!"
+    fi
+    
+    # 5. Список всех доступных libvirt actions
+    log_info "5. Список libvirt polkit actions..."
+    echo "Доступные libvirt actions:"
+    pkaction | grep "org.libvirt" | head -20
+    echo "..."
+    
+    # 6. Проверка прав для конкретных действий
+    log_info "6. Проверка прав пользователя student для libvirt действий..."
+    
+    if id "student" &>/dev/null; then
+        local test_actions=(
+            "org.libvirt.unix.manage"
+            "org.libvirt.storage-pool.create"
+            "org.libvirt.storage-pool.define"
+            "org.libvirt.storage-pool.delete"
+            "org.libvirt.storage-pool.getattr"
+            "org.libvirt.domain.create"
+            "org.libvirt.domain.start"
+        )
+        
+        for action in "${test_actions[@]}"; do
+            echo -n "  $action: "
+            # Проверка действия от имени student
+            local result=$(sudo -u student pkcheck --action-id "$action" --process $$ 2>&1)
+            if echo "$result" | grep -q "authorized"; then
+                echo -e "${GREEN}РАЗРЕШЕНО${NC}"
+            elif echo "$result" | grep -q "not authorized"; then
+                echo -e "${RED}ЗАПРЕЩЕНО${NC}"
+            else
+                echo -e "${YELLOW}НЕИЗВЕСТНО${NC} ($result)"
+            fi
+        done
+    else
+        log_warning "Пользователь student не существует"
+    fi
+    
+    # 7. Проверка логов polkit
+    log_info "7. Последние записи в логах polkit/authorization..."
+    if [[ -f /var/log/secure ]]; then
+        echo "Последние 20 строк из /var/log/secure с упоминанием polkit:"
+        sudo grep -i "polkit\|authorization" /var/log/secure | tail -20 || echo "Записи не найдены"
+    fi
+    
+    if command -v journalctl &> /dev/null; then
+        echo ""
+        echo "Последние записи из journalctl для polkit:"
+        sudo journalctl -u polkit --no-pager -n 20 2>/dev/null || echo "Записи не найдены"
+    fi
+    
+    # 8. Проверка членства в группах
+    log_info "8. Проверка членства в группах..."
+    if id "student" &>/dev/null; then
+        echo "Группы пользователя student:"
+        id student
+    fi
+    
+    # 9. Рекомендации по отладке
+    log_info "=== РЕКОМЕНДАЦИИ ПО ОТЛАДКЕ ==="
+    echo "1. Проверьте логи в реальном времени:"
+    echo "   sudo journalctl -u polkit -f"
+    echo ""
+    echo "2. Проверьте логи libvirt:"
+    echo "   sudo journalctl -u libvirtd -n 50"
+    echo ""
+    echo "3. Включите отладку polkit (добавьте в /etc/polkit-1/rules.d/00-debug.rules):"
+    echo "   polkit.addRule(function(action, subject) {"
+    echo "       polkit.log(\"action=\" + action + \" subject=\" + subject);"
+    echo "   });"
+    echo ""
+    echo "4. Перезапустите службы после изменения правил:"
+    echo "   sudo systemctl restart polkit"
+    echo "   sudo systemctl restart libvirtd"
+    echo ""
+    echo "5. Тестируйте от имени student:"
+    echo "   sudo -u student virsh pool-list --all"
+    echo "   sudo -u student virsh pool-define-as test dir - - - - /tmp/test"
+    echo ""
+    echo "6. Проверьте, что polkit использует правильный backend:"
+    echo "   ls -la /etc/polkit-1/rules.d/"
+    echo "   ls -la /usr/share/polkit-1/rules.d/"
+    
+    log_success "Отладка завершена"
+}
+
 # Функция для установки FPC (Free Pascal Compiler) и PascalNet
 # Документация: https://redos.red-soft.ru/base/redos-7_3/7_3-development/7_3-compiler/7_3-fpc-compiler/
 install_fpc() {
@@ -827,6 +1091,211 @@ install_fpc() {
     fi
 }
 
+# Функция для установки GCC (GNU Compiler)
+install_gcc() {
+    log_info "Установка GCC (GNU Compiler)..."
+    
+    # Проверка установки GCC
+    if command -v gcc &> /dev/null; then
+        local gcc_version=$(gcc --version | head -1)
+        log_warning "GCC уже установлен: $gcc_version"
+        return 0
+    fi
+    
+    # Установка GCC через dnf
+    log_info "Установка пакета gcc через dnf..."
+    if sudo dnf install -y gcc; then
+        log_success "GCC успешно установлен"
+        
+        # Вывод информации о версии компилятора
+        local gcc_version=$(gcc --version | head -1)
+        log_info "Версия компилятора: $gcc_version"
+        
+        return 0
+    else
+        log_error "Ошибка при установке GCC"
+        return 1
+    fi
+}
+
+# Load Veyon keys from environment variables
+# These should be set via .env file or GitHub Actions secrets
+# Source: .env file or environment variables
+VEYON_STUDENT_PUBLIC_KEY="${VEYON_STUDENT_PUBLIC_KEY:-}"
+VEYON_TEACHER_PRIVATE_KEY="${VEYON_TEACHER_PRIVATE_KEY:-}"
+
+# Функция для установки Veyon
+install_veyon() {
+    log_info "Установка Veyon..."
+    
+    # Проверка установки Veyon
+    if command -v veyon-configurator &> /dev/null; then
+        log_warning "Veyon уже установлен"
+        return 0
+    fi
+    
+    # Установка Veyon через dnf
+    log_info "Установка пакета veyon через dnf..."
+    if sudo dnf install -y veyon; then
+        log_success "Veyon успешно установлен"
+        return 0
+    else
+        log_error "Ошибка при установке Veyon"
+        return 1
+    fi
+}
+
+# Функция для копирования публичного ключа студента (по умолчанию)
+configure_veyon_student_key() {
+    log_info "Настройка публичного ключа студента Veyon..."
+    
+    # Проверка установки Veyon
+    if ! command -v veyon-configurator &> /dev/null; then
+        log_error "Veyon не установлен. Сначала установите Veyon."
+        return 1
+    fi
+    
+    # Проверка наличия публичного ключа в переменной окружения
+    if [[ -z "$VEYON_STUDENT_PUBLIC_KEY" ]]; then
+        log_error "VEYON_STUDENT_PUBLIC_KEY не установлена в переменных окружения"
+        log_info "Установите переменную VEYON_STUDENT_PUBLIC_KEY в файле .env или как переменную окружения"
+        log_info "Пример: export VEYON_STUDENT_PUBLIC_KEY=\"-----BEGIN PUBLIC KEY-----...-----END PUBLIC KEY-----\""
+        return 1
+    fi
+    
+    # Создание директории для публичного ключа
+    log_info "Создание директории для публичного ключа..."
+    sudo mkdir -p /etc/veyon/keys/public/student
+    
+    # Копирование публичного ключа студента
+    log_info "Копирование публичного ключа студента..."
+    echo "$VEYON_STUDENT_PUBLIC_KEY" | sudo tee /etc/veyon/keys/public/student/key > /dev/null
+    
+    if [[ -f /etc/veyon/keys/public/student/key ]]; then
+        log_success "Публичный ключ студента скопирован в /etc/veyon/keys/public/student/key"
+    else
+        log_error "Ошибка при копировании публичного ключа студента"
+        return 1
+    fi
+    
+    # Установка прав доступа для публичного ключа
+    log_info "Установка прав доступа для ключа..."
+    sudo chmod 644 /etc/veyon/keys/public/student/key
+    sudo chown root:root /etc/veyon/keys/public/student/key
+    
+    log_success "Публичный ключ студента успешно настроен"
+    log_info "Расположение ключа: /etc/veyon/keys/public/student/key"
+    
+    return 0
+}
+
+# Функция для копирования приватного ключа преподавателя (только вручную)
+configure_veyon_teacher_key() {
+    log_info "Настройка приватного ключа преподавателя Veyon..."
+    
+    # Проверка установки Veyon
+    if ! command -v veyon-configurator &> /dev/null; then
+        log_error "Veyon не установлен. Сначала установите Veyon."
+        return 1
+    fi
+    
+    # Проверка наличия приватного ключа в переменной окружения
+    if [[ -z "$VEYON_TEACHER_PRIVATE_KEY" ]]; then
+        log_error "VEYON_TEACHER_PRIVATE_KEY не установлена в переменных окружения"
+        log_info "Установите переменную VEYON_TEACHER_PRIVATE_KEY в файле .env или как переменную окружения"
+        log_info "Пример: export VEYON_TEACHER_PRIVATE_KEY=\"-----BEGIN PRIVATE KEY-----...-----END PRIVATE KEY-----\""
+        return 1
+    fi
+    
+    log_warning "ВНИМАНИЕ: Эта операция установит приватный ключ преподавателя!"
+    log_warning "Приватный ключ должен быть установлен только на компьютере преподавателя."
+    echo -n "Вы уверены, что хотите продолжить? (yes/no): "
+    read -r confirm
+    
+    if [[ "$confirm" != "yes" ]]; then
+        log_info "Операция отменена"
+        return 0
+    fi
+    
+    # Создание директории для приватного ключа
+    log_info "Создание директории для приватного ключа..."
+    sudo mkdir -p /etc/veyon/keys/private/student
+    
+    # Копирование приватного ключа преподавателя
+    log_info "Копирование приватного ключа преподавателя..."
+    echo "$VEYON_TEACHER_PRIVATE_KEY" | sudo tee /etc/veyon/keys/private/student/key > /dev/null
+    
+    if [[ -f /etc/veyon/keys/private/student/key ]]; then
+        log_success "Приватный ключ преподавателя скопирован в /etc/veyon/keys/private/student/key"
+    else
+        log_error "Ошибка при копировании приватного ключа преподавателя"
+        return 1
+    fi
+    
+    # Установка прав доступа для приватного ключа
+    log_info "Установка прав доступа для ключа..."
+    sudo chmod 600 /etc/veyon/keys/private/student/key
+    sudo chown root:root /etc/veyon/keys/private/student/key
+    
+    log_success "Приватный ключ преподавателя успешно настроен"
+    log_info "Расположение ключа: /etc/veyon/keys/private/student/key"
+    
+    return 0
+}
+
+# Меню управления Veyon
+veyon_management() {
+    while true; do
+        echo ""
+        echo -e "${BLUE}=== Управление Veyon ===${NC}"
+        echo "1. Установить Veyon"
+        echo "2. Настроить публичный ключ студента"
+        echo "3. Настроить приватный ключ преподавателя (ТОЛЬКО ДЛЯ КОМПЬЮТЕРА ПРЕПОДАВАТЕЛЯ)"
+        echo "4. Вернуться в меню программного обеспечения"
+        echo -n "Выберите опцию: "
+        read -r choice
+        
+        case $choice in
+            1)
+                install_veyon
+                ;;
+            2)
+                configure_veyon_student_key
+                ;;
+            3)
+                configure_veyon_teacher_key
+                ;;
+            4)
+                break
+                ;;
+            *)
+                log_error "Неверная опция"
+                ;;
+        esac
+    done
+}
+
+# Функция для установки LibreCAD
+install_librecad() {
+    log_info "Установка LibreCAD..."
+    
+    # Проверка установки LibreCAD
+    if command -v librecad &> /dev/null; then
+        log_warning "LibreCAD уже установлен"
+        return 0
+    fi
+    
+    # Установка LibreCAD через dnf
+    log_info "Установка пакета librecad через dnf..."
+    if sudo dnf install -y librecad; then
+        log_success "LibreCAD успешно установлен"
+        return 0
+    else
+        log_error "Ошибка при установке LibreCAD"
+        return 1
+    fi
+}
+
 # Функция для установки всего ПО
 install_all_software() {
     log_info "Установка всех пакетов ПО..."
@@ -835,6 +1304,10 @@ install_all_software() {
     install_pycharm
     install_libvirt
     install_fpc
+    install_gcc
+    install_veyon
+    configure_veyon_student_key
+    install_librecad
     
     log_success "Установка ПО завершена"
 }
@@ -875,8 +1348,11 @@ software_installation() {
         echo "2. Установить PyCharm Community"
         echo "3. Управление libvirt (QEMU-KVM)"
         echo "4. Установить FPC (Free Pascal Compiler)"
-        echo "5. Установить все программное обеспечение"
-        echo "6. Вернуться в главное меню"
+        echo "5. Установить GCC (GNU Compiler Collection)"
+        echo "6. Управление Veyon"
+        echo "7. Установить LibreCAD"
+        echo "8. Установить все программное обеспечение"
+        echo "9. Вернуться в главное меню"
         echo -n "Выберите опцию: "
         read -r choice
         
@@ -894,9 +1370,18 @@ software_installation() {
                 install_fpc
                 ;;
             5)
-                install_all_software
+                install_gcc
                 ;;
             6)
+                veyon_management
+                ;;
+            7)
+                install_librecad
+                ;;
+            8)
+                install_all_software
+                ;;
+            9)
                 break
                 ;;
             *)
@@ -942,6 +1427,28 @@ setup_student_user() {
     log_info "Установка пароля для пользователя 'root'..."
     echo "root:qw401hng" | sudo chpasswd
     log_success "Пароль установлен для 'root'"
+
+    # Разрешить подключение root по SSH в /etc/ssh/sshd_config
+    log_info "Разрешение SSH-подключения для root в /etc/ssh/sshd_config..."
+    sshd_config="/etc/ssh/sshd_config"
+    if [[ -f "$sshd_config" ]]; then
+        if sudo grep -qE '^\s*PermitRootLogin' "$sshd_config"; then
+            sudo sed -i 's/^\s*PermitRootLogin.*/PermitRootLogin yes/' "$sshd_config"
+        else
+            echo "PermitRootLogin yes" | sudo tee -a "$sshd_config" > /dev/null
+        fi
+
+        # Попытка перезапуска sshd (разные дистрибутивы используют sshd или ssh)
+        if sudo systemctl restart sshd 2>/dev/null; then
+            log_success "sshd перезапущен — изменения применены"
+        elif sudo systemctl restart ssh 2>/dev/null; then
+            log_success "ssh сервис перезапущен — изменения применены"
+        else
+            log_warning "Не удалось автоматически перезапустить службу SSH. Пожалуйста, перезапустите sshd вручную: sudo systemctl restart sshd"
+        fi
+    else
+        log_warning "/etc/ssh/sshd_config не найден — пропуск конфигурирования SSH для root"
+    fi
     
     # Добавление в группу libvirt для доступа к виртуальным машинам
     log_info "Добавление пользователя в группу libvirt..."
@@ -960,22 +1467,41 @@ setup_student_user() {
 
 polkit.addRule(function(action, subject) {
     if (subject.user == "student") {
+        // Запретить ВСЕ действия со storage pools
+        if (action.id.indexOf("org.libvirt.storage-pool") === 0) {
+            // Разрешить только чтение
+            if (action.id.match(/\.(getattr|open|list|read)$/)) {
+                return polkit.Result.YES;
+            }
+            // Запретить всё остальное явно
+            return polkit.Result.NO;
+        }
+        
         // Разрешить подключение к libvirt
         if (action.id.match(/^org\.libvirt\.unix\.manage$/)) {
             return polkit.Result.YES;
         }
+        
         // Разрешить управление виртуальными машинами (запуск, остановка, пауза)
-        if (action.id.match(/^org\.libvirt\.domain\.(getattr|open|list|read-config)$/)) {
+        if (action.id.match(/^org\.libvirt\.domain\.(getattr|open|list|read)$/)) {
             return polkit.Result.YES;
         }
         if (action.id.match(/^org\.libvirt\.domain\.control\.manage$/)) {
             return polkit.Result.YES;
         }
-        // Запретить создание и редактирование конфигураций
-        if (action.id.match(/^org\.libvirt\.domain\.(create|delete|modify|undefine)$/)) {
+        
+        // Запретить создание и редактирование конфигураций доменов
+        if (action.id.match(/^org\.libvirt\.domain\.(create|delete|modify|write|save|snapshot|revert)$/)) {
             return polkit.Result.NO;
         }
-        if (action.id.match(/^org\.libvirt\.network\.control-modify$/)) {
+        
+        // Запретить изменение сетей
+        if (action.id.match(/^org\.libvirt\.network\.(create|delete|modify|write)$/)) {
+            return polkit.Result.NO;
+        }
+        
+        // Запретить изменение интерфейсов
+        if (action.id.match(/^org\.libvirt\.interface\.(create|delete|modify|write)$/)) {
             return polkit.Result.NO;
         }
     }
@@ -984,9 +1510,34 @@ POLKIT_EOF
     
     log_success "Правила polkit созданы"
     
-    # Создание конфигурации libvirt для ограничения доступа
-    log_info "Конфигурирование libvirt ACL..."
+    # Конфигурирование libvirt для использования сеансового подключения (qemu:///session)
+    log_info "Конфигурирование libvirt ACL и URI..."
     sudo mkdir -p /etc/libvirt/qemu/
+    
+    # Настройка libvirt для раздельного хранения объектов пользователей
+    # Создание скрипта для студента, который будет использовать qemu:///session
+    log_info "Создание алиаса для student для использования session URI..."
+    student_bashrc="/home/$username/.bashrc"
+    
+    # Удаляем старый блок LIBVIRT_URI если существует
+    if [[ -f "$student_bashrc" ]]; then
+        sudo sed -i '/^# >>> VOLSU_LIBVIRT_START/,/^# <<< VOLSU_LIBVIRT_END/d' "$student_bashrc" || true
+    fi
+    
+    # Добавляем новый блок с настройкой LIBVIRT_URI
+    {
+        echo "# >>> VOLSU_LIBVIRT_START"
+        echo "# Использовать пользовательский сеанс libvirt для изоляции"
+        echo "export LIBVIRT_DEFAULT_URI=qemu:///session"
+        echo "alias virsh='virsh --connect qemu:///session'"
+        echo "alias virt-manager='virt-manager --connect qemu:///session'"
+        echo "# <<< VOLSU_LIBVIRT_END"
+    } | sudo tee -a "$student_bashrc" > /dev/null
+    
+    # Восстанавливаем права на .bashrc (должен быть доступен только для чтения)
+    sudo chown root:root "$student_bashrc"
+    sudo chmod 644 "$student_bashrc"
+    log_success "Настроена изоляция через qemu:///session для пользователя student"
     
     # Применение изменений
     if command -v systemctl &> /dev/null; then
@@ -999,15 +1550,707 @@ POLKIT_EOF
     echo "  student: volsu"
     echo "  red8: qw401hng"
     echo "  root: qw401hng"
+    log_warning "ВАЖНО: Пользователь 'student' использует изолированный сеанс libvirt"
+    echo "  - Student работает с qemu:///session (изолированное пространство)"
+    echo "  - Администраторы (red8) работают с qemu:///system (общее пространство)"
+    echo "  - ВМ и storage pools между ними НЕ ВИДНЫ друг другу"
     log_warning "Пользователь 'student' может:"
-    echo "  - Подключаться к libvirt"
-    echo "  - Просматривать виртуальные машины"
-    echo "  - Запускать и останавливать ВМ"
+    echo "  - Подключаться к своему изолированному libvirt сеансу"
+    echo "  - Просматривать свои виртуальные машины"
+    echo "  - Запускать и останавливать свои ВМ"
     log_warning "Пользователь 'student' НЕ может:"
-    echo "  - Создавать новые ВМ"
-    echo "  - Изменять конфигурацию ВМ"
-    echo "  - Удалять ВМ"
+    echo "  - Видеть ВМ и storage pools администраторов"
+    echo "  - Создавать storage pools (запрещено polkit)"
+    echo "  - Изменять системные настройки libvirt"
     echo "  - Изменять сетевые настройки"
+
+    # Отключение KWallet для пользователя
+    log_info "Отключение KWallet для пользователя '$username'..."
+    kwallet_config="/home/$username/.config/kwalletrc"
+    sudo -u "$username" mkdir -p "$(dirname "$kwallet_config")"
+    
+    if [[ -f "$kwallet_config" ]]; then
+        # Если файл существует, обновляем или добавляем настройку
+        if grep -q '^\[Wallet\]' "$kwallet_config"; then
+            # Секция [Wallet] существует
+            if grep -q '^Enabled=' "$kwallet_config"; then
+                # Параметр Enabled существует, обновляем его
+                sudo -u "$username" sed -i '/^\[Wallet\]/,/^\[/ s/^Enabled=.*/Enabled=false/' "$kwallet_config"
+            else
+                # Добавляем Enabled=false в секцию [Wallet]
+                sudo -u "$username" sed -i '/^\[Wallet\]/a Enabled=false' "$kwallet_config"
+            fi
+        else
+            # Секция [Wallet] не существует, добавляем её
+            echo -e "\n[Wallet]\nEnabled=false" | sudo -u "$username" tee -a "$kwallet_config" > /dev/null
+        fi
+    else
+        # Файл не существует, создаём новый
+        sudo -u "$username" tee "$kwallet_config" > /dev/null <<'KWALLET_EOF'
+[Wallet]
+Enabled=false
+KWALLET_EOF
+    fi
+    
+    sudo chown "$username:$username" "$kwallet_config"
+    sudo chmod 644 "$kwallet_config"
+    log_success "KWallet отключён для пользователя '$username'"
+
+    # Настройка ограничений KDE (KDE Kiosk)
+    log_info "Настройка ограничений KDE для пользователя '$username'..."
+    kdeglobals_config="/home/$username/.config/kdeglobals"
+    sudo -u "$username" mkdir -p "$(dirname "$kdeglobals_config")"
+    
+    # Создание или обновление kdeglobals с ограничениями согласно https://develop.kde.org/docs/administration/kiosk/keys/
+    # Эти ключи запрещают изменение обоев, темы, внешнего вида приложений и настроек управления окнами
+    sudo -u "$username" tee "$kdeglobals_config" > /dev/null <<'KDEGLOBALS_EOF'
+# KDE Kiosk lockdown configuration for student user
+# Based on https://develop.kde.org/docs/administration/kiosk/keys/ (2025)
+
+[$i]
+
+[KDE Action Restrictions][$i]
+# Запрет контекстного меню на заголовке окна и рамке (KWin)
+action/kwin_rmb=false
+
+# Запрет изменения настроек через меню Settings
+action/options_configure=false
+action/options_configure_keybinding=false
+action/options_configure_toolbars=false
+action/options_configure_notifications=false
+
+# Запрет доступа к настройкам рабочего стола через контекстное меню
+action/configdesktop=false
+
+[KDE Resource Restrictions][$i]
+# Запрет на изменение обоев рабочего стола
+wallpaper=false
+
+# Запрет на изменение данных конфигурации
+config=false
+
+# Запрет скачивания нового контента (Get Hot New Stuff)
+ghns=false
+
+# Ограничения Plasma
+plasma/allow_configure_when_locked=false
+plasma/containment_actions=false
+plasma/plasmashell/unlockedDesktop=false
+plasma-desktop/add_activities=false
+
+# Запрет добавления виджетов
+action/add widgets=false
+action/configure panel=false
+
+[org.kde.kdeglobals.General][$i]
+# Блокировка настроек внешнего вида
+
+[org.kde.kdeglobals.KDE][$i]
+# Блокировка общих настроек KDE
+KDEGLOBALS_EOF
+    
+    # Создание дополнительных конфигурационных файлов для полной блокировки настроек
+    
+    # Блокировка настроек внешнего вида окон (kwinrc)
+    kwinrc_config="/home/$username/.config/kwinrc"
+    sudo -u "$username" tee "$kwinrc_config" > /dev/null <<'KWINRC_EOF'
+# Блокировка настроек KWin (оконный менеджер)
+[$i]
+
+[org.kde.kdecoration2][$i]
+# Запрет изменения декорации окон
+KWINRC_EOF
+    sudo chown "$username:$username" "$kwinrc_config"
+    sudo chmod 644 "$kwinrc_config"
+    
+    # Блокировка настроек курсора (kcminputrc)
+    kcminputrc_config="/home/$username/.config/kcminputrc"
+    sudo -u "$username" tee "$kcminputrc_config" > /dev/null <<'KCMINPUTRC_EOF'
+# Блокировка настроек ввода (мышь, курсор, клавиатура)
+[$i]
+
+[Mouse][$i]
+# Запрет изменения настроек мыши
+
+[Keyboard][$i]
+# Запрет изменения настроек клавиатуры
+KCMINPUTRC_EOF
+    sudo chown "$username:$username" "$kcminputrc_config"
+    sudo chmod 644 "$kcminputrc_config"
+    
+    # Блокировка настроек plasma (plasmarc)
+    plasmarc_config="/home/$username/.config/plasmarc"
+    sudo -u "$username" tee "$plasmarc_config" > /dev/null <<'PLASMARC_EOF'
+# Блокировка настроек Plasma
+[$i]
+
+[General]
+locked=true
+
+[Theme][$i]
+# Запрет изменения темы Plasma
+
+[Wallpapers][$i]
+# Запрет изменения обоев
+PLASMARC_EOF
+    sudo chown "$username:$username" "$plasmarc_config"
+    sudo chmod 644 "$plasmarc_config"
+    
+    # Блокировка plasma-org.kde.plasma.desktop-appletsrc
+    plasma_desktop_config="/home/$username/.config/plasma-org.kde.plasma.desktop-appletsrc"
+    if sudo test -f "$plasma_desktop_config"; then
+        # Добавляем locked=true в секцию [General] если файл существует
+        if sudo grep -q '^\[General\]' "$plasma_desktop_config"; then
+            # Секция [General] существует
+            if ! sudo grep -q '^locked=' "$plasma_desktop_config"; then
+                # Параметр locked не существует, добавляем его
+                sudo sed -i '/^\[General\]/a locked=true' "$plasma_desktop_config"
+            else
+                # Параметр locked существует, обновляем его
+                sudo sed -i 's/^locked=.*/locked=true/' "$plasma_desktop_config"
+            fi
+        else
+            # Секция [General] не существует, добавляем её в начало файла
+            sudo sed -i '1i[General]\nlocked=true\n' "$plasma_desktop_config"
+        fi
+        
+        # Убираем права на запись для student пользователя
+        sudo chown root:root "$plasma_desktop_config"
+        sudo chmod 644 "$plasma_desktop_config"
+        log_success "Параметр locked=true добавлен и файл защищён от изменений"
+    else
+        # Файл не существует, создадим базовую конфигурацию
+        log_info "Создание базового файла plasma-org.kde.plasma.desktop-appletsrc"
+        sudo tee "$plasma_desktop_config" > /dev/null <<'PLASMA_DESKTOP_EOF'
+[General]
+locked=true
+PLASMA_DESKTOP_EOF
+        sudo chown root:root "$plasma_desktop_config"
+        sudo chmod 644 "$plasma_desktop_config"
+        log_success "Файл plasma-org.kde.plasma.desktop-appletsrc создан и защищён"
+    fi
+    
+    # Блокировка System Settings modules (systemsettingsrc)
+    systemsettingsrc_config="/home/$username/.config/systemsettingsrc"
+    sudo -u "$username" tee "$systemsettingsrc_config" > /dev/null <<'SYSTEMSETTINGSRC_EOF'
+# Блокировка доступа к System Settings
+[$i]
+SYSTEMSETTINGSRC_EOF
+    sudo chown "$username:$username" "$systemsettingsrc_config"
+    sudo chmod 644 "$systemsettingsrc_config"
+    
+    sudo chown "$username:$username" "$kdeglobals_config"
+    sudo chmod 644 "$kdeglobals_config"
+    
+    # Защита .bashrc от изменений пользователем student
+    bashrc_file="/home/$username/.bashrc"
+    if [[ ! -f "$bashrc_file" ]]; then
+        log_info "Создание .bashrc для пользователя '$username'..."
+        sudo touch "$bashrc_file"
+        # Копируем базовый .bashrc если существует шаблон
+        if [[ -f /etc/skel/.bashrc ]]; then
+            sudo cp /etc/skel/.bashrc "$bashrc_file"
+        fi
+    fi
+    
+    # Всегда защищаем .bashrc
+    log_info "Защита .bashrc от изменений пользователем '$username'..."
+    sudo chown root:root "$bashrc_file"
+    sudo chmod 644 "$bashrc_file"
+    log_success "Файл .bashrc защищён от изменений"
+    
+    log_success "Настройки ограничений KDE применены для пользователя '$username'"
+    log_info "Пользователь '$username' НЕ может изменять:"
+    echo "  - Обои рабочего стола (wallpaper)"
+    echo "  - Тему оформления (theme)"
+    echo "  - Внешний вид приложений (стили, цвета, шрифты, иконки)"
+    echo "  - Декорации окон (window decorations)"
+    echo "  - Настройки управления окнами (window management)"
+    echo "  - Стиль курсора (cursor theme)"
+    echo "  - Настройки мыши (mouse settings)"
+    echo "  - Эффекты рабочего стола (desktop effects)"
+    echo "  - Поведение рабочей среды (workspace behavior)"
+    echo "  - Контекстные меню окон (window context menus)"
+    echo "  - Скачивание нового контента (GHNS)"
+    echo "  - Добавление виджетов (add widgets)"
+    echo "  - Настройка панелей (configure panel)"
+    echo "  - Создание активностей (add activities)"
+
+    # Загрузка и установка обоев рабочего стола
+    log_info "Загрузка обоев рабочего стола для пользователя '$username'..."
+    
+    # Определение количества мониторов
+    monitor_count=1
+    if command -v xrandr &> /dev/null; then
+        monitor_count=$(xrandr --query | grep -c " connected")
+        log_info "Обнаружено мониторов: $monitor_count"
+    else
+        log_warning "xrandr не найден, предполагаем 1 монитор"
+    fi
+    
+    wallpaper_dir="/home/$username/.local/share/wallpapers"
+    user_autostart_dir="/home/$username/.config/autostart"
+    plasma_config="/home/$username/.config/plasma-org.kde.plasma.desktop-appletsrc"
+    
+    # Создание директорий с правильными правами
+    # Сначала создаём всю иерархию директорий и устанавливаем владельца
+    local parent_dirs=("/home/$username/.local" "/home/$username/.local/share")
+    for parent_dir in "${parent_dirs[@]}"; do
+        if [[ ! -d "$parent_dir" ]]; then
+            sudo mkdir -p "$parent_dir"
+            sudo chown "$username:$username" "$parent_dir"
+            sudo chmod 755 "$parent_dir"
+        else
+            # Директория существует, но нужно убедиться, что владелец правильный
+            sudo chown "$username:$username" "$parent_dir"
+        fi
+    done
+    
+    if [[ ! -d "$wallpaper_dir" ]]; then
+        sudo mkdir -p "$wallpaper_dir"
+        log_info "Создана директория: $wallpaper_dir"
+    fi
+    # Всегда устанавливаем правильного владельца и права
+    sudo chown "$username:$username" "$wallpaper_dir"
+    sudo chmod 755 "$wallpaper_dir"
+    
+    if [[ ! -d "$user_autostart_dir" ]]; then
+        sudo mkdir -p "$user_autostart_dir"
+        log_info "Создана директория: $user_autostart_dir"
+    fi
+    # Всегда устанавливаем правильного владельца и права
+    sudo chown "$username:$username" "$user_autostart_dir"
+    sudo chmod 755 "$user_autostart_dir"
+    
+    # Убедимся, что все родительские директории также имеют правильные права
+    sudo chmod 755 "/home/$username/.local" "/home/$username/.local/share" 2>/dev/null || true
+    
+    # Получение директории, где находится скрипт
+    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+    # Функция загрузки обоев
+    download_wallpaper() {
+        local source_file="$1"
+        local dest_file="$2"
+        local url="$3"
+        
+        if sudo test -f "$source_file" 2>/dev/null; then
+            log_info "Найден локальный файл обоев: $source_file"
+            log_info "Копирование локального файла обоев..."
+            if sudo cp "$source_file" "$dest_file"; then
+                log_success "Локальный файл обоев скопирован в $dest_file"
+                return 0
+            else
+                log_error "Не удалось скопировать локальный файл обоев"
+                return 1
+            fi
+        else
+            log_info "Локальный файл не найден (возможно ограничение доступа): $source_file. Загрузка из интернета: $url"
+            
+            # Создаём временный файл для загрузки
+            temp_wallpaper=$(mktemp /tmp/wallpaper.XXXXXX.png)
+            
+            # Загрузка обоев во временный файл
+            if command -v wget &> /dev/null; then
+                log_info "Загрузка обоев с помощью wget из $url..."
+                if wget --progress=bar:force --show-progress -O "$temp_wallpaper" "$url" 2>&1; then
+                    log_success "Загрузка завершена"
+                    if sudo cp "$temp_wallpaper" "$dest_file"; then
+                        log_success "Файл обоев скопирован в $dest_file"
+                        rm -f "$temp_wallpaper"
+                        return 0
+                    else
+                        log_error "Не удалось скопировать файл обоев в целевую директорию"
+                        rm -f "$temp_wallpaper"
+                        return 1
+                    fi
+                else
+                    wget_exit_code=$?
+                    log_error "Ошибка при загрузке обоев через wget (код ошибки: $wget_exit_code)"
+                    rm -f "$temp_wallpaper"
+                    return 1
+                fi
+            elif command -v curl &> /dev/null; then
+                log_info "Загрузка обоев с помощью curl из $url..."
+                if curl -# -f -o "$temp_wallpaper" "$url"; then
+                    log_success "Загрузка завершена"
+                    if sudo cp "$temp_wallpaper" "$dest_file"; then
+                        log_success "Файл обоев скопирован в $dest_file"
+                        rm -f "$temp_wallpaper"
+                        return 0
+                    else
+                        log_error "Не удалось скопировать файл обоев в целевую директорию"
+                        rm -f "$temp_wallpaper"
+                        return 1
+                    fi
+                else
+                    curl_exit_code=$?
+                    log_error "Ошибка при загрузке обоев через curl (код ошибки: $curl_exit_code)"
+                    rm -f "$temp_wallpaper"
+                    return 1
+                fi
+            else
+                log_error "wget или curl не найдены. Не удалось загрузить обои."
+                return 1
+            fi
+        fi
+    }
+    
+    # Проверка и загрузка обоев в зависимости от количества мониторов
+    download_success=false
+    wallpaper_files=()
+    
+    if [[ $monitor_count -eq 1 ]]; then
+        log_info "Настройка обоев для одного монитора..."
+        local_wallpaper="$script_dir/shared.png"
+        wallpaper_file="$wallpaper_dir/volsu.png"
+        wallpaper_url="https://static.nn-projects.ru/shared.png"
+        
+        if download_wallpaper "$local_wallpaper" "$wallpaper_file" "$wallpaper_url"; then
+            download_success=true
+            wallpaper_files+=("$wallpaper_file")
+        fi
+    elif [[ $monitor_count -eq 2 ]]; then
+        log_info "Настройка обоев для двух мониторов..."
+        local_left="$script_dir/left.png"
+        local_right="$script_dir/right.png"
+        wallpaper_left="$wallpaper_dir/volsu-left.png"
+        wallpaper_right="$wallpaper_dir/volsu-right.png"
+        url_left="https://static.nn-projects.ru/left.png"
+        url_right="https://static.nn-projects.ru/right.png"
+        
+        left_success=false
+        right_success=false
+        
+        if download_wallpaper "$local_left" "$wallpaper_left" "$url_left"; then
+            left_success=true
+            wallpaper_files+=("$wallpaper_left")
+        fi
+        
+        if download_wallpaper "$local_right" "$wallpaper_right" "$url_right"; then
+            right_success=true
+            wallpaper_files+=("$wallpaper_right")
+        fi
+        
+        if [[ "$left_success" == true && "$right_success" == true ]]; then
+            download_success=true
+        fi
+    else
+        log_warning "Обнаружено $monitor_count мониторов. Поддерживается только 1 или 2 монитора."
+        # Для других случаев используем single wallpaper
+        local_wallpaper="$script_dir/shared.png"
+        wallpaper_file="$wallpaper_dir/volsu.png"
+        wallpaper_url="https://static.nn-projects.ru/shared.png"
+        
+        if download_wallpaper "$local_wallpaper" "$wallpaper_file" "$wallpaper_url"; then
+            download_success=true
+            wallpaper_files+=("$wallpaper_file")
+        fi
+    fi
+    
+    # Проверка результата загрузки и установка обоев
+    if [[ "$download_success" == true && ${#wallpaper_files[@]} -gt 0 ]]; then
+        # Проверяем и защищаем все загруженные файлы
+        all_files_valid=true
+        for wfile in "${wallpaper_files[@]}"; do
+            if sudo test -f "$wfile"; then
+                file_size=$(sudo stat -f%z "$wfile" 2>/dev/null || sudo stat -c%s "$wfile" 2>/dev/null || echo "0")
+                if [[ "$file_size" -gt 1000 ]]; then
+                    # Защита файла обоев от удаления пользователем
+                    sudo chown root:root "$wfile"
+                    sudo chmod 644 "$wfile"
+                    log_success "Обои загружены и защищены: $wfile (размер: $file_size байт)"
+                else
+                    log_error "Файл обоев слишком мал или поврежден: $wfile (размер: $file_size байт)"
+                    sudo rm -f "$wfile"
+                    all_files_valid=false
+                fi
+            else
+                log_error "Файл обоев не найден: $wfile"
+                all_files_valid=false
+            fi
+        done
+        
+        if [[ "$all_files_valid" == true ]]; then
+            # Установка обоев для Plasma через автозапуск
+            log_info "Применение обоев для рабочего стола Plasma..."
+            
+            # Создание скрипта автозапуска для установки обоев при входе
+            wallpaper_autostart="$user_autostart_dir/set-wallpaper.desktop"
+            
+            # Формируем команду установки обоев в зависимости от количества мониторов
+            if [[ $monitor_count -eq 1 ]]; then
+                # Один монитор - используем стандартный подход
+                if command -v plasma-apply-wallpaperimage &> /dev/null; then
+                    log_info "Используем plasma-apply-wallpaperimage для установки обоев (1 монитор)"
+                    sudo tee "$wallpaper_autostart" > /dev/null <<EOF
+[Desktop Entry]
+Type=Application
+Name=Set VOLSU Wallpaper
+Exec=plasma-apply-wallpaperimage $wallpaper_file
+X-KDE-autostart-after=plasma-workspace
+X-GNOME-Autostart-enabled=true
+NoDisplay=true
+Comment=Set VOLSU wallpaper on login
+EOF
+                else
+                    log_info "Используем qdbus для установки обоев (1 монитор)"
+                    sudo tee "$wallpaper_autostart" > /dev/null <<EOF
+[Desktop Entry]
+Type=Application
+Name=Set VOLSU Wallpaper
+Exec=/bin/sh -c 'sleep 5; qdbus org.kde.plasmashell /PlasmaShell org.kde.PlasmaShell.evaluateScript "var allDesktops = desktops();for (i=0;i<allDesktops.length;i++) {d = allDesktops[i];d.wallpaperPlugin = \\"org.kde.image\\";d.currentConfigGroup = Array(\\"Wallpaper\\", \\"org.kde.image\\", \\"General\\");d.writeConfig(\\"Image\\", \\"file://$wallpaper_file\\");d.writeConfig(\\"FillMode\\", \\"2\\");}"'
+X-KDE-autostart-after=plasma-workspace
+X-GNOME-Autostart-enabled=true
+NoDisplay=true
+Comment=Set VOLSU wallpaper on login
+EOF
+                fi
+            elif [[ $monitor_count -eq 2 ]]; then
+                # Два монитора - создаем отдельный скрипт для установки обоев
+                log_info "Создание скрипта для установки обоев (2 монитора)"
+                wallpaper_script="$wallpaper_dir/set-wallpaper.sh"
+                
+                sudo tee "$wallpaper_script" > /dev/null <<'WALLPAPER_SCRIPT'
+#!/bin/bash
+# Script to set different wallpapers for dual monitors
+
+sleep 5
+
+# JavaScript code for Plasma
+js_code='
+var allDesktops = desktops();
+
+if (allDesktops.length >= 1) {
+    var d = allDesktops[0];
+    d.wallpaperPlugin = "org.kde.image";
+    d.currentConfigGroup = ["Wallpaper", "org.kde.image", "General"];
+    d.writeConfig("Image", "file://WALLPAPER_LEFT_PATH");
+    d.writeConfig("FillMode", "2");
+}
+
+if (allDesktops.length >= 2) {
+    var d = allDesktops[1];
+    d.wallpaperPlugin = "org.kde.image";
+    d.currentConfigGroup = ["Wallpaper", "org.kde.image", "General"];
+    d.writeConfig("Image", "file://WALLPAPER_RIGHT_PATH");
+    d.writeConfig("FillMode", "2");
+}
+'
+
+# Execute the script
+qdbus org.kde.plasmashell /PlasmaShell org.kde.PlasmaShell.evaluateScript "$js_code" 2>&1 | logger -t volsu-wallpaper
+WALLPAPER_SCRIPT
+
+                # Replace placeholders with actual paths
+                sudo sed -i "s|WALLPAPER_LEFT_PATH|$wallpaper_left|g" "$wallpaper_script"
+                sudo sed -i "s|WALLPAPER_RIGHT_PATH|$wallpaper_right|g" "$wallpaper_script"
+                
+                sudo chmod 755 "$wallpaper_script"
+                sudo chown root:root "$wallpaper_script"
+                log_success "Создан скрипт установки обоев: $wallpaper_script"
+                
+                # Create autostart entry that calls the script
+                sudo tee "$wallpaper_autostart" > /dev/null <<EOF
+[Desktop Entry]
+Type=Application
+Name=Set VOLSU Wallpaper
+Exec=$wallpaper_script
+X-KDE-autostart-after=plasma-workspace
+X-GNOME-Autostart-enabled=true
+NoDisplay=true
+Comment=Set VOLSU wallpaper on login for dual monitors
+EOF
+            fi
+            
+            sudo chown root:root "$wallpaper_autostart"
+            sudo chmod 644 "$wallpaper_autostart"
+            log_success "Автозапуск установки обоев создан: $wallpaper_autostart"
+            
+            # Защита директории wallpapers от изменений пользователем
+            sudo chown root:root "$wallpaper_dir"
+            sudo chmod 755 "$wallpaper_dir"
+            
+            log_info "Обои будут применены при следующем входе пользователя в систему"
+        else
+            log_error "Некоторые файлы обоев повреждены или недоступны"
+        fi
+    else
+        log_warning "Не удалось загрузить обои"
+    fi
+
+    # Отключение энергосбережения монитора для KDE: создаём автозапуск, который выполняет xset
+    log_info "Отключение энергосбережения монитора для пользователя '$username' (KDE autostart)..."
+
+    # Найдём полный путь до xset, если он есть
+    xset_path=""
+    if command -v xset &> /dev/null; then
+        xset_path=$(command -v xset)
+    elif [[ -x "/usr/bin/xset" ]]; then
+        xset_path="/usr/bin/xset"
+    fi
+
+    # Создаём файл в пользовательской директории autostart
+    desktop_file="$user_autostart_dir/disable-monitor-energy.desktop"
+
+    if [[ -n "$xset_path" ]]; then
+        sudo tee "$desktop_file" > /dev/null <<EOF
+[Desktop Entry]
+Type=Application
+Name=Disable Monitor Energy Saving
+Exec=/bin/sh -c '$xset_path s off; $xset_path -dpms; $xset_path s noblank'
+X-KDE-autostart-after=plasma-workspace
+X-GNOME-Autostart-enabled=true
+Hidden=false
+NoDisplay=true
+Comment=Disable screen blanking and DPMS on session start
+EOF
+        sudo chown root:root "$desktop_file"
+        sudo chmod 644 "$desktop_file"
+        
+        # Проверка что файл создан
+        if [[ -f "$desktop_file" ]]; then
+            log_success "Автозапуск отключения энергосбережения создан: $desktop_file"
+            ls -lh "$desktop_file"
+        else
+            log_error "Не удалось создать файл: $desktop_file"
+        fi
+    else
+        # Если xset не доступен, попробуем записать powermanagementprofilesrc как запасной вариант
+        log_warning "xset не найден; обновляем или создаём powermanagementprofilesrc в домашней директории пользователя"
+        pm_file="/home/$username/.config/powermanagementprofilesrc"
+        sudo -u "$username" mkdir -p "$(dirname "$pm_file")"
+
+        # Цель: в секции [AC] (или заголовке [AC][DPMSControl]) установить idleTime=21600 (6 часов)
+        if [[ -f "$pm_file" ]]; then
+            tmpfile="$(mktemp)"
+            sudo -u "$username" awk '
+                BEGIN { in_ac=0; seen=0 }
+                /^\[AC(\]|\]\[DPMSControl\])?/ { print; in_ac=1; next }
+                /^\[/ { if(in_ac==1 && seen==0) { print "idleTime=21600"; seen=1 } in_ac=0; print; next }
+                { if(in_ac==1 && $0 ~ /^idleTime=/) { print "idleTime=21600"; seen=1; next } print }
+                END { if(in_ac==1 && seen==0) print "idleTime=21600" }
+            ' "$pm_file" > "$tmpfile" && sudo -u "$username" mv "$tmpfile" "$pm_file"
+            sudo chown "$username:$username" "$pm_file" || true
+            sudo chmod 644 "$pm_file" || true
+            log_success "powermanagementprofilesrc обновлён: $pm_file (idleTime=21600 в секции [AC])"
+        else
+            sudo -u "$username" tee "$pm_file" > /dev/null <<'PMNEW'
+[AC]
+idleTime=21600
+PMNEW
+            sudo chown "$username:$username" "$pm_file"
+            sudo chmod 644 "$pm_file"
+            log_success "powermanagementprofilesrc создан: $pm_file (idleTime=21600)"
+        fi
+    fi
+    
+    # Защита директории autostart от изменений пользователем
+    # Делаем это в конце, после создания всех autostart скриптов
+    log_info "Защита директории autostart от изменений..."
+    sudo chown root:root "$user_autostart_dir"
+    sudo chmod 755 "$user_autostart_dir"
+    log_success "Директория autostart защищена от изменений пользователем"
+    
+    # Удаление нежелательных приложений из меню
+    log_info "Удаление нежелательных приложений..."
+    if [[ -f /usr/share/applications/wine-winemine.desktop ]]; then
+        sudo rm -f /usr/share/applications/wine-winemine.desktop
+        log_success "Удалён wine-winemine.desktop"
+    fi
+
+    # Удаление Wine
+    log_info "Удаление Wine..."
+    log_info "Удаление Wine бинарников из /usr/bin..."
+    sudo rm -f /usr/bin/wine* || true
+    log_success "Wine бинарники удалены"
+    
+    log_info "Удаление пакетов Wine через dnf..."
+    sudo dnf remove -y 'wine*' || true
+    log_success "Пакеты Wine удалены"
+}
+
+# Функция для сброса конфигурации мыши для пользователя
+
+# Функция для удаления всей конфигурации student
+delete_student_config() {
+    local target_user="${1:-student}"
+    
+    log_warning "Вы собираетесь удалить весь .config для пользователя '$target_user'"
+    echo -n "Это действие нельзя отменить. Вы уверены? (yes/no): "
+    read -r confirmation
+    
+    if [[ "$confirmation" != "yes" ]]; then
+        log_info "Отмена удаления .config"
+        return 0
+    fi
+    
+    log_info "Удаление .config для пользователя '$target_user'..."
+    
+    # Проверка существования пользователя
+    if ! id "$target_user" &>/dev/null; then
+        log_error "Пользователь '$target_user' не существует"
+        return 1
+    fi
+    
+    local user_home=$(eval echo "~$target_user")
+    local config_dir="$user_home/.config"
+    
+    # Удаление всей директории .config
+    if [[ -d "$config_dir" ]]; then
+        log_info "Удаление директории: $config_dir"
+        sudo rm -rf "$config_dir"
+        log_success "Директория .config удалена"
+    else
+        log_info "Директория .config не найдена: $config_dir"
+    fi
+    
+    log_success ".config удален для пользователя '$target_user'"
+    log_warning "Пользователю необходимо перезайти в систему для восстановления конфигурации по умолчанию"
+    
+    return 0
+}
+
+reset_mouse_config() {
+    local target_user="${1:-student}"
+    
+    log_info "Сброс конфигурации мыши для пользователя '$target_user'..."
+    
+    # Проверка существования пользователя
+    if ! id "$target_user" &>/dev/null; then
+        log_error "Пользователь '$target_user' не существует"
+        return 1
+    fi
+    
+    local user_home=$(eval echo "~$target_user")
+    local kcminputrc="$user_home/.config/kcminputrc"
+    
+    # Удаление файла конфигурации ввода
+    if [[ -f "$kcminputrc" ]]; then
+        log_info "Удаление файла конфигурации: $kcminputrc"
+        sudo rm -f "$kcminputrc"
+        log_success "Файл конфигурации удален"
+    else
+        log_info "Файл конфигурации не найден: $kcminputrc"
+    fi
+    
+    # Очистка кэша конфигурации KDE
+    local kde_cache_dirs=(
+        "$user_home/.cache/ksycoca5*"
+        "$user_home/.cache/kde-config"
+    )
+    
+    for cache_pattern in "${kde_cache_dirs[@]}"; do
+        if compgen -G "$cache_pattern" > /dev/null 2>&1; then
+            log_info "Очистка кэша: $cache_pattern"
+            sudo rm -rf $cache_pattern
+        fi
+    done
+    
+    log_success "Конфигурация мыши сброшена для пользователя '$target_user'"
+    log_warning "Пользователю необходимо перезайти в систему для применения изменений"
+    
+    return 0
 }
 
 # Меню управления пользователями
@@ -1015,8 +2258,11 @@ user_management() {
     while true; do
         echo ""
         echo -e "${BLUE}=== Управление пользователями ===${NC}"
-        echo "1. Создать/обновить пользователя 'student' (volsu)"
-        echo "2. Вернуться в главное меню"
+        echo "1. Актуализировать пользователей"
+        echo "2. Сбросить конфигурацию мыши для student"
+        echo "3. Удалить конфигурацию для student"
+        echo "4. Отладить polkit правила"
+        echo "5. Вернуться в главное меню"
         echo -n "Выберите опцию: "
         read -r choice
         
@@ -1025,6 +2271,15 @@ user_management() {
                 setup_student_user
                 ;;
             2)
+                reset_mouse_config "student"
+                ;;
+            3)
+                delete_student_config
+                ;;
+            4)
+                debug_polkit_rules
+                ;;
+            5)
                 break
                 ;;
             *)
@@ -1432,5 +2687,14 @@ main_menu() {
 
 # Main execution
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
-    main_menu
+    # Обработка аргументов командной строки для внутренних вызовов с sudo
+    if [[ "${1:-}" == "--set-proxy" ]] && [[ -n "${2:-}" ]]; then
+        set_proxy "$2"
+        exit 0
+    elif [[ "${1:-}" == "--disable-proxy" ]]; then
+        disable_proxy
+        exit 0
+    else
+        main_menu
+    fi
 fi

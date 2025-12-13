@@ -1,0 +1,32 @@
+.DS_Store
+
+.env
+
+# Binaries
+build/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+pc-management-exporter
+pc-management-exporter-*
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool
+*.out
+
+# Dependency directories
+vendor/
+
+# Go workspace file
+go.work
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
