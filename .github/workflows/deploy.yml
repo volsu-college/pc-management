@@ -91,48 +91,50 @@ jobs:
       
       - name: Template setup.sh with secrets
         run: |
-          # Use Python for proper string handling with multi-line secrets
-          python3 << 'EOF'
-import os
-import re
-
-# Read the setup.sh file
-with open('setup.sh', 'r') as f:
-    content = f.read()
-
-# Get secrets from environment
-secrets = {
-    'STUDENT_PASSWORD': os.environ.get('STUDENT_PASSWORD', ''),
-    'RED8_PASSWORD': os.environ.get('RED8_PASSWORD', ''),
-    'ROOT_PASSWORD': os.environ.get('ROOT_PASSWORD', ''),
-    'VEYON_STUDENT_PUBLIC_KEY': os.environ.get('VEYON_STUDENT_PUBLIC_KEY', ''),
-    'VEYON_TEACHER_PRIVATE_KEY': os.environ.get('VEYON_TEACHER_PRIVATE_KEY', '')
-}
-
-# Replace each variable, escaping quotes in values
-for key, value in secrets.items():
-    # Escape backslashes and double quotes in the value
-    escaped_value = value.replace('\\', '\\\\').replace('"', '\\"').replace('\n', '\\n')
-    # Replace the line in the script
-    pattern = f'{key}=.*'
-    replacement = f'{key}="{escaped_value}"'
-    content = re.sub(pattern, replacement, content)
-
-# Write templated script
-with open('/tmp/script.sh', 'w') as f:
-    f.write(content)
-
-# Make it executable
-os.chmod('/tmp/script.sh', 0o755)
-EOF
+          # Save secrets to temporary files to avoid escaping issues
+          echo "${{ secrets.STUDENT_PASSWORD }}" > /tmp/student_pwd
+          echo "${{ secrets.RED8_PASSWORD }}" > /tmp/red8_pwd
+          echo "${{ secrets.ROOT_PASSWORD }}" > /tmp/root_pwd
+          echo "${{ secrets.VEYON_STUDENT_PUBLIC_KEY }}" > /tmp/veyon_student
+          echo "${{ secrets.VEYON_TEACHER_PRIVATE_KEY }}" > /tmp/veyon_teacher
+          
+          # Create templated version using awk for multi-line safe replacement
+          awk '
+            /^STUDENT_PASSWORD=/ {
+              print "STUDENT_PASSWORD=\"" ENVIRON["STUDENT_PWD"] "\""
+              next
+            }
+            /^RED8_PASSWORD=/ {
+              print "RED8_PASSWORD=\"" ENVIRON["RED8_PWD"] "\""
+              next
+            }
+            /^ROOT_PASSWORD=/ {
+              print "ROOT_PASSWORD=\"" ENVIRON["ROOT_PWD"] "\""
+              next
+            }
+            /^VEYON_STUDENT_PUBLIC_KEY=/ {
+              print "VEYON_STUDENT_PUBLIC_KEY=\"" ENVIRON["VEYON_STUDENT"] "\""
+              next
+            }
+            /^VEYON_TEACHER_PRIVATE_KEY=/ {
+              print "VEYON_TEACHER_PRIVATE_KEY=\"" ENVIRON["VEYON_TEACHER"] "\""
+              next
+            }
+            { print }
+          ' setup.sh > /tmp/script.sh
+          
+          chmod +x /tmp/script.sh
+          
+          # Clean up temp files
+          rm -f /tmp/student_pwd /tmp/red8_pwd /tmp/root_pwd /tmp/veyon_student /tmp/veyon_teacher
           
           echo "TEMPLATED_SCRIPT_PATH=/tmp/script.sh" >> $GITHUB_ENV
         env:
-          STUDENT_PASSWORD: ${{ secrets.STUDENT_PASSWORD }}
-          RED8_PASSWORD: ${{ secrets.RED8_PASSWORD }}
-          ROOT_PASSWORD: ${{ secrets.ROOT_PASSWORD }}
-          VEYON_STUDENT_PUBLIC_KEY: ${{ secrets.VEYON_STUDENT_PUBLIC_KEY }}
-          VEYON_TEACHER_PRIVATE_KEY: ${{ secrets.VEYON_TEACHER_PRIVATE_KEY }}
+          STUDENT_PWD: ${{ secrets.STUDENT_PASSWORD }}
+          RED8_PWD: ${{ secrets.RED8_PASSWORD }}
+          ROOT_PWD: ${{ secrets.ROOT_PASSWORD }}
+          VEYON_STUDENT: ${{ secrets.VEYON_STUDENT_PUBLIC_KEY }}
+          VEYON_TEACHER: ${{ secrets.VEYON_TEACHER_PRIVATE_KEY }}
       
       - name: Send templated script to Telegram
         run: |
