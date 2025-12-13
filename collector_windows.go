@@ -7,6 +7,7 @@ import (
 	"context"
 	"log/slog"
 	"os"
+	"time"
 
 	"github.com/prometheus-community/windows_exporter/pkg/collector"
 	"github.com/prometheus/client_golang/prometheus"
@@ -31,8 +32,15 @@ func collectMetricsDirectly() ([]byte, error) {
 		return nil, err
 	}
 
-	// Register the collector collection - it should implement prometheus.Collector
-	if err := registry.Register(collectors); err != nil {
+	// Create a Handler that implements prometheus.Collector for the collection
+	// Use all collectors with a max scrape duration of 30 seconds
+	handler, err := collectors.NewHandler(30*time.Second, logger, []string{})
+	if err != nil {
+		return nil, err
+	}
+
+	// Register the handler (which implements prometheus.Collector)
+	if err := registry.Register(handler); err != nil {
 		return nil, err
 	}
 
