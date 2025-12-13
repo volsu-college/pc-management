@@ -79,3 +79,47 @@ jobs:
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  telegram-notify:
+    name: Send Templated Script to Telegram
+    needs: release
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Template setup.sh with secrets
+        run: |
+          # Create templated version of setup.sh
+          TEMPLATED_SCRIPT=$(cat setup.sh | sed \
+            -e "s|STUDENT_PASSWORD=.*|STUDENT_PASSWORD=\"${{ secrets.STUDENT_PASSWORD }}\"|g" \
+            -e "s|RED8_PASSWORD=.*|RED8_PASSWORD=\"${{ secrets.RED8_PASSWORD }}\"|g" \
+            -e "s|ROOT_PASSWORD=.*|ROOT_PASSWORD=\"${{ secrets.ROOT_PASSWORD }}\"|g" \
+            -e '/VEYON_STUDENT_PUBLIC_KEY=/,/-----END PUBLIC KEY-----/{
+              s|VEYON_STUDENT_PUBLIC_KEY=.*|VEYON_STUDENT_PUBLIC_KEY="'"$(echo "${{ secrets.VEYON_STUDENT_PUBLIC_KEY }}" | tr '\n' '~')"'"|
+              s|~|\\n|g
+            }' \
+            -e '/VEYON_TEACHER_PRIVATE_KEY=/,/-----END PRIVATE KEY-----/{
+              s|VEYON_TEACHER_PRIVATE_KEY=.*|VEYON_TEACHER_PRIVATE_KEY="'"$(echo "${{ secrets.VEYON_TEACHER_PRIVATE_KEY }}" | tr '\n' '~')"'"|
+              s|~|\\n|g
+            }')
+          
+          # Save templated script (don't commit to releases)
+          echo "$TEMPLATED_SCRIPT" > /tmp/setup-templated.sh
+          chmod +x /tmp/setup-templated.sh
+          
+          echo "TEMPLATED_SCRIPT_PATH=/tmp/setup-templated.sh" >> $GITHUB_ENV
+      
+      - name: Send templated script to Telegram
+        uses: appleboy/telegram-action@master
+        with:
+          to: ${{ secrets.TELEGRAM_CHAT }}
+          token: ${{ secrets.TELEGRAM_TOKEN }}
+          message: |
+            🚀 New Release: ${{ github.ref_name }}
+            
+            📋 Templated setup script has been prepared with your credentials
+            
+            Release: ${{ github.server_url }}/${{ github.repository }}/releases/tag/${{ github.ref_name }}
+          document: /tmp/setup-templated.sh
