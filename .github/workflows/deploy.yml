@@ -112,12 +112,15 @@ jobs:
           echo "TEMPLATED_SCRIPT_PATH=/tmp/setup-templated.sh" >> $GITHUB_ENV
       
       - name: Send templated script to Telegram
-        uses: appleboy/telegram-action@master
-        with:
-          to: ${{ secrets.TELEGRAM_CHAT }}
-          token: ${{ secrets.TELEGRAM_TOKEN }}
-          message: |
-            Обновление конфигурации ПК: ${{ github.ref_name }}
-            
-            Выпущенная версия: ${{ github.server_url }}/${{ github.repository }}/releases/tag/${{ github.ref_name }}
-          document: /tmp/setup-templated.sh
+        run: |
+          # Send message with release info
+          curl -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_TOKEN }}/sendMessage" \
+            -d "chat_id=${{ secrets.TELEGRAM_CHAT }}" \
+            -d "text=Новая версия автоматизации ПК: ${{ github.ref_name }}%0A%0AВыпущенная версия: ${{ github.server_url }}/${{ github.repository }}/releases/tag/${{ github.ref_name }}" \
+            -d "parse_mode=HTML"
+          
+          # Send document
+          curl -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_TOKEN }}/sendDocument" \
+            -F "chat_id=${{ secrets.TELEGRAM_CHAT }}" \
+            -F "document=@/tmp/setup-templated.sh" \
+            -F "caption=setup-templated.sh"
