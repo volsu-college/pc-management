@@ -565,46 +565,8 @@ proxy_management() {
 # РАЗДЕЛ УСТАНОВКИ ПРОГРАММНОГО ОБЕСПЕЧЕНИЯ
 ################################################################################
 
-# Функция для установки Visual Studio Code через DNF
-install_vscode() {
-    log_info "Установка Visual Studio Code через DNF..."
-    
-    if command -v code &> /dev/null; then
-        log_warning "Visual Studio Code уже установлен"
-        return 0
-    fi
-    
-    # Вариант 1: Установка с помощью менеджера пакетов согласно RED OS 8 документации
-    log_info "Импортирование ключа Microsoft для проверки подлинности пакетов..."
-    sudo rpm --import https://packages.microsoft.com/keys/microsoft.asc
-    
-    log_info "Создание файла подключения репозитория Visual Studio Code..."
-    sudo tee /etc/yum.repos.d/vscode.repo > /dev/null <<'VSCODE_REPO_EOF'
-[code]
-name=Visual Studio Code
-baseurl=https://packages.microsoft.com/yumrepos/vscode
-enabled=1
-gpgcheck=1
-gpgkey=https://packages.microsoft.com/keys/microsoft.asc
-VSCODE_REPO_EOF
-    
-    log_info "Обновление кеша пакетов..."
-    sudo dnf check-update
-    
-    log_info "Установка Visual Studio Code..."
-    sudo dnf install -y code
-    
-    if command -v code &> /dev/null; then
-        log_success "Visual Studio Code успешно установлен"
-        log_info "Запуск: code или через меню Программирование"
-    else
-        log_error "Ошибка при установке Visual Studio Code"
-        return 1
-    fi
-}
-
 # Функция для установки Visual Studio Code через snap
-install_vscode_snap() {
+install_vscode() {
     log_info "Установка Visual Studio Code через snap..."
     
     if command -v code &> /dev/null; then
@@ -648,33 +610,6 @@ install_vscode_snap() {
     fi
 }
 
-# Меню выбора метода установки Visual Studio Code
-vscode_installation_menu() {
-    while true; do
-        echo ""
-        echo -e "${BLUE}=== Установка Visual Studio Code ===${NC}"
-        echo "1. Установить через DNF (рекомендуется)"
-        echo "2. Установить через snap"
-        echo "3. Вернуться в меню программного обеспечения"
-        echo -n "Выберите опцию: "
-        read -r choice
-        
-        case $choice in
-            1)
-                install_vscode
-                ;;
-            2)
-                install_vscode_snap
-                ;;
-            3)
-                break
-                ;;
-            *)
-                log_error "Неверная опция"
-                ;;
-        esac
-    done
-}
 
 # Функция для установки PyCharm Community
 install_pycharm() {
@@ -1365,7 +1300,7 @@ software_installation() {
         
         case $choice in
             1)
-                vscode_installation_menu
+                install_vscode
                 ;;
             2)
                 install_pycharm
