@@ -1,0 +1,17 @@
+---
+- name: Shutdown machines
+  hosts: all
+  gather_facts: no
+
+  vars:
+    ansible_user: root
+    ansible_password: qw401hng
+    ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
+
+  tasks:
+    - name: Shutdown the machine
+      ansible.builtin.command: shutdown -h now
+      async: 0
+      poll: 0
+      ignore_errors: yes
+      ignore_unreachable: yes
