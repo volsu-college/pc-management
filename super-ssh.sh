@@ -86,7 +86,7 @@ try_authenticate_jump_host() {
 
     # Try each password
     for password in "${PASSWORDS[@]}"; do
-        echo -e "${YELLOW}[Auth] Trying password for $jump_host...${NC}"
+        echo -e "${YELLOW}[Auth] Trying password for $jump_host...${NC}" >&2
 
         local auth_test
         auth_test=$(sshpass -p "$password" ssh -o StrictHostKeyChecking=no \
@@ -98,13 +98,16 @@ try_authenticate_jump_host() {
             $USER@$jump_host "echo 'AUTH_OK'" 2>&1)
 
         if [[ "$auth_test" == *"AUTH_OK"* ]]; then
-            echo -e "${GREEN}[Auth] Successfully authenticated to $jump_host${NC}"
-            echo "$password"  # Return the working password
+            echo -e "${GREEN}[Auth] Successfully authenticated to $jump_host${NC}" >&2
+            echo "$password"  # Return ONLY the working password to stdout
             return 0
+        else
+            # Show why authentication failed
+            echo -e "${RED}[Auth] Failed: $auth_test${NC}" | head -1 >&2
         fi
     done
 
-    echo -e "${RED}[Auth] All passwords failed for $jump_host${NC}"
+    echo -e "${RED}[Auth] All passwords failed for $jump_host${NC}" >&2
     return 1
 }
 
@@ -167,13 +170,17 @@ try_ssh_via_subnet() {
             # Try to authenticate to jump host with all passwords
             local working_password
             working_password=$(try_authenticate_jump_host "$jump_host")
+            local auth_result=$?
 
-            if [ $? -ne 0 ]; then
+            if [ $auth_result -ne 0 ]; then
                 echo -e "${RED}[Skip] Cannot authenticate to $jump_host, skipping...${NC}"
                 continue
             fi
 
-            echo -e "${GREEN}[Success] Authenticated to $jump_host with working password${NC}"
+            # Strip only trailing newline, preserve spaces in password
+            working_password=$(echo -n "$working_password")
+
+            echo -e "${GREEN}[Success] Authenticated to $jump_host with working password (length: ${#working_password})${NC}"
 
             # First check if target is reachable from jump host
             echo -e "${YELLOW}[Test] Checking if $target is reachable from $jump_host...${NC}"
@@ -194,7 +201,7 @@ try_ssh_via_subnet() {
                 if try_ssh_via_jump_host "$jump_host" "$target" "$working_password"; then
                     echo -e "${GREEN}✓ Successfully connected to $target via $jump_host${NC}"
                     echo -e "${GREEN}Use this command to connect:${NC}"
-                    echo -e "ssh -o ProxyCommand=\"sshpass -p PASSWORD ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -W %h:%p $USER@$jump_host\" $USER@$target"
+                    echo -e "sshpass -p '$working_password' ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ProxyCommand=\"sshpass -p '$working_password' ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -W %h:%p $USER@$jump_host\" $USER@$target"
                     return 0
                 else
                     echo -e "${RED}✗ Failed to connect via $jump_host, trying next host...${NC}"
