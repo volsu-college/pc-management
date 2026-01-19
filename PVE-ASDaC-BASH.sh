@@ -63,7 +63,7 @@ declare -A config_base=(
     [access_user_enable]=true
 
     [_access_pass_length]='Длина создаваемых паролей для пользователей'
-    [access_pass_length]=5
+    [access_pass_length]=8
 
     [_access_pass_chars]='Используемые символы в паролях [regex]'
     [access_pass_chars]='A-Z0-9'
@@ -874,7 +874,22 @@ function configure_poolname() {
         for stand in ${opt_stand_nums[@]}; do
             pool_name="${config_base[pool_name]/\{0\}/$stand}"
             echo "$pool_list" | grep -Fxq -- "$pool_name" \
-                && { echo_warn "Предупреждение: пул '$pool_name' уже существует. Удаляем старый пул..."; run_cmd "pvesh delete /pools/$pool_name" || { echo_err "Ошибка при удалении пула '$pool_name'"; ${3:-true} && exit 1 || config_base[pool_name]=$def_value && return 1; }; }
+                && {
+                    echo_warn "Предупреждение: пул '$pool_name' уже существует. Удаляем старый пул..."
+
+                    # Get list of VMs in the pool and delete them
+                    local pool_vms=$(pvesh get /pools/$pool_name --output-format=json 2>/dev/null | grep -Po '"vmid"\s*:\s*\K[0-9]+' || true)
+                    if [[ -n "$pool_vms" ]]; then
+                        echo_warn "Удаляем VM из пула '$pool_name': $pool_vms"
+                        for vmid in $pool_vms; do
+                            echo_verbose "Удаление VM $vmid..."
+                            run_cmd /noexit "qm stop $vmid" 2>/dev/null || true
+                            run_cmd /noexit "qm destroy $vmid --purge 1" || echo_warn "Не удалось удалить VM $vmid"
+                        done
+                    fi
+
+                    run_cmd "pvesh delete /pools/$pool_name" || { echo_err "Ошибка при удалении пула '$pool_name'"; ${3:-true} && exit 1 || config_base[pool_name]=$def_value && return 1; }
+                }
         done
     }
 }
@@ -1026,7 +1041,7 @@ function check_config() {
         ! isbool_check "${config_base[$val]}" && echo_err "Ошибка: зачение переменной конфигурации $val должна быть bool и равляться true или false. Выход" && exit 1
     done
 
-    ! isdigit_check "${config_base[access_pass_length]}" 5 20 && echo_err "Ошибка: значение переменной конфигурации access_pass_length должнно быть числом от 5 до 20. Выход" && exit 1
+    ! isdigit_check "${config_base[access_pass_length]}" 8 20 && echo_err "Ошибка: значение переменной конфигурации access_pass_length должнно быть числом от 8 до 20. Выход" && exit 1
     isregex_check "[${config_base[access_pass_chars]}]" && deploy_access_passwd test || { echo_err "Ошибка: паттерн regexp '[${config_base[access_pass_chars]}]' для разрешенных символов в пароле некорректен или не захватывает достаточно символов для составления пароля. Выход"; exit 1; }
 }
 
@@ -1151,6 +1166,7 @@ function deploy_stand_config() {
             if_desc=$( echo "${BASH_REMATCH[2]/\\\"/\"}" | sed 's/[[:space:]]*$//' )
             if_config="${BASH_REMATCH[4]}"
             [[ "$if_config" =~ ^.*,\ *state\ *=\ *down\ *($|,.+$) ]] && net_options+=',link_down=1'
+            [[ "$if_config" =~ ^.*,\ *firewall\ *=\ *1\ *($|,.+$) ]] && net_options+=',firewall=1'
             [[ "$if_config" =~ ^.*,\ *trunks\ *=\ *([0-9\;]*[0-9])\ *($|,.+$) ]] && net_options+=",trunks=${BASH_REMATCH[1]}" && vlan_aware=" --bridge_vlan_aware 'true'"
             [[ "$if_config" =~ ^.*,\ *tag\ *=\ *([1-9][0-9]{0,2}|[1-3][0-9]{3}|40([0-8][0-9]|9[0-4]))\ *($|,.+$) ]] && net_options+=",tag=${BASH_REMATCH[1]}" && vlan_aware=" --bridge_vlan_aware 'true'"
             if [[ "$if_config" =~ ^.*,\ *vtag\ *=\ *([1-9][0-9]{0,2}|[1-3][0-9]{3}|40([0-8][0-9]|9[0-4]))\ *($|,.+$) ]]; then
@@ -1220,12 +1236,24 @@ function deploy_stand_config() {
         esac
         $_exit && { echo_err "Ошибка: невозможно присоедиить больше $((disk_num-1)) дисков типа '$disk_type' к ВМ '$elem'. Выход"; exit 1;}
 
+        # Check for disk options (e.g., boot_disk_0_opt)
+        local disk_opts=""
+        if [[ -v "vm_config[${1}_opt]" ]]; then
+            # Remove curly braces and leading/trailing spaces
+            disk_opts="${vm_config[${1}_opt]}"
+            disk_opts="${disk_opts#\{}"  # Remove leading {
+            disk_opts="${disk_opts%\}}"  # Remove trailing }
+            disk_opts="${disk_opts#"${disk_opts%%[![:space:]]*}"}"  # Remove leading whitespace
+            disk_opts="${disk_opts%"${disk_opts##*[![:space:]]}"}"  # Remove trailing whitespace
+            disk_opts=",$disk_opts"
+        fi
+
         if [[ "${BASH_REMATCH[1]}" != boot_ ]] && [[ "$2" =~ ^([0-9]+(|\.[0-9]+))\ *([gGГг][bBБб]?)?$ ]]; then
-            cmd_line+=" --${disk_type}${disk_num} '${config_base[storage]}:${BASH_REMATCH[1]},format=$config_disk_format'";
+            cmd_line+=" --${disk_type}${disk_num} '${config_base[storage]}:${BASH_REMATCH[1]},format=$config_disk_format$disk_opts'";
         else
             local file="$2"
             get_file file || exit 1
-            cmd_line+=" --${disk_type}${disk_num} '${config_base[storage]}:0,format=$config_disk_format,import-from=$file'"
+            cmd_line+=" --${disk_type}${disk_num} '${config_base[storage]}:0,format=$config_disk_format,import-from=$file$disk_opts'"
             [[ "$boot_order" != '' ]] && boot_order+=';'
             boot_order+="${disk_type}${disk_num}"
         fi
@@ -1307,7 +1335,6 @@ function deploy_stand_config() {
         local disk_num=0
         local boot_order=''
         local -A vm_config=()
-        local cmd_line="qm create '$vmid' --name '$elem' --pool '$pool_name'"
 
         get_dict_config "config_stand_${opt_sel_var}_var[$elem]" vm_config
 
@@ -1317,6 +1344,12 @@ function deploy_stand_config() {
             get_dict_config "config_stand_${opt_sel_var}_var[$elem]" vm_config
             unset -v 'vm_config[config_template]';
         }
+
+        # Use 'name' from config if available, otherwise use $elem
+        local vm_name="${vm_config[name]:-$elem}"
+        [[ -v "vm_config[name]" ]] && unset -v 'vm_config[name]'
+
+        cmd_line="qm create '$vmid' --name '$vm_name' --pool '$pool_name'"
         [[ "${vm_config[netifs_type]}" != '' ]] && netifs_type="${vm_config[netifs_type]}" && unset -v 'vm_config[netifs_type]'
         [[ "${vm_config[disk_type]}" != '' ]] && disk_type="${vm_config[disk_type]}" && unset -v 'vm_config[disk_type]'
 
@@ -1327,9 +1360,11 @@ function deploy_stand_config() {
                 startup|tags|ostype|serial0|serial1|serial2|serial3|agent|scsihw|cpu|cores|memory|bios|bwlimit|description|args|arch|vga|kvm|rng0|acpi|tablet|reboot)
                     cmd_line+=" --$opt '${vm_config[$opt]}'";;
                 network*) set_netif_conf "$opt" "${vm_config[$opt]}";;
+                boot_disk*_opt|disk*_opt|network*_opt|firewall_opt) ;; # Skip options, they are handled separately
                 boot_disk*|disk*) set_disk_conf "$opt" "${vm_config[$opt]}";;
-                access_roles) ${config_base[access_create]} && set_role_config "${vm_config[$opt]}";;
+                access_roles|access_role) ${config_base[access_create]} && set_role_config "${vm_config[$opt]}";;
                 machine) set_machine_type "${vm_config[$opt]}";;
+                os_descr|templ_descr) ;; # Informational parameters, skip
                 *) echo_warn "[Предупреждение]: обнаружен неизвестный параметр конфигурации '$opt = ${vm_config[$opt]}' ВМ '$elem'. Пропущен"
             esac
         done
@@ -1460,7 +1495,7 @@ function install_stands() {
                     (config_base[$opt]="$val"; [[ "${config_base[access_auth_pam_desc]}" != '' && "${config_base[access_auth_pam_desc]}" == "${config_base[access_auth_pve_desc]}" ]] && echo_err 'Ошибка: видимые имена типов аутентификации не должны быть одинаковыми' ) && continue
 
                     descr_string_check "$val" || { echo_err 'Ошибка: введенное значение является некорректным'; continue; };;
-                access_pass_length) isdigit_check "$val" 5 20 || { echo_err 'Ошибка: допустимая длина паролей от 5 до 20'; continue; } ;;
+                access_pass_length) isdigit_check "$val" 8 20 || { echo_err 'Ошибка: допустимая длина паролей от 8 до 20'; continue; } ;;
                 access_pass_chars) isregex_check "[$val]" && ( config_base[access_pass_chars]="$val"; deploy_access_passwd test ) || { echo_err 'Ошибка: введенное значение не является регулярным выражением или не захватывает достаточно символов для составления пароля'; continue; } ;;
                 *) echo_err 'Внутреняя ошибка скрипта. Выход'; exit 1;;
             esac
