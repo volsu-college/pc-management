@@ -836,16 +836,6 @@ function configure_imgdir() {
         && mkdir -p "${config_base[mk_tmpfs_imgdir]}" && \
             { mountpoint -q "${config_base[mk_tmpfs_imgdir]}" || mount -t tmpfs tmpfs "${config_base[mk_tmpfs_imgdir]}" -o size=1M; } \
             || { echo_err 'Ошибка при создании временного хранилища tmpfs'; exit 1; }
-
-    if [[ "$1" == add-size ]]; then
-        isdigit_check "$2" || { echo "Ошибка: " && exit 1; }
-        awk -v size=$((($2+8388608)/1024)) '/MemAvailable/ {if($2<size) {exit 1} }' /proc/meminfo || \
-            { echo_err $'Ошибка: Недостаточно свободной оперативной памяти!\nДля развертывания стенда необходимо как минимум '$((size/1024/1024))' ГБ свободоной ОЗУ'; exit 1; }
-        local size="$( df | awk -v dev="${config_base[mk_tmpfs_imgdir]}" '$6==dev{print $3}' )"
-        isdigit_check "$size" || { echo "Ошибка: 1 \$size=$size" && exit 1; }
-        size=$((size*1024+$2+4294967296))
-        mount -o remount,size=$size "${config_base[mk_tmpfs_imgdir]}" || { echo_err "Ошибка: не удалось расширить временный tmpfs раздел. Выход"; exit 1; }
-    fi
 }
 
 function check_name() {
@@ -913,7 +903,7 @@ function configure_username() {
         for stand in ${opt_stand_nums[@]}; do
             user_name="${config_base[access_user_name]/\{0\}/$stand}@pve"
             echo "$user_list" | grep -Fxq -- "$user_name" \
-                && { echo_err "Ошибка: пользователь $user_name уже существует!"; ${3:-true} && exit 1 || config_base[access_user_name]=$def_value && return 1; }
+                && { echo_warn "Предупреждение: пользователь $user_name уже существует. Удаляем старого пользователя..."; run_cmd "pveum user delete '$user_name'" || { echo_err "Ошибка при удалении пользователя '$user_name'"; ${3:-true} && exit 1 || config_base[access_user_name]=$def_value && return 1; }; }
         done
     fi
     return 0

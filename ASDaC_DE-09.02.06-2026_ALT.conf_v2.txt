@@ -60,7 +60,7 @@ config_templates[Alt-Workstation]='
 
 #///=========================== Конфигурация варианта установки ===========================\\\#
 
-config_stand_1_var[stand_config]='
+config_stand_1_var[_stand_config]='
         description              = Демэкзамен ССА, КОД 09.02.06-2026. Модуль № 1 (Alt OS)
         group_display_desc       = Демэкзамен ССА 09.02.06-2026. Модуль 1
         pool_name                = DE_09.02.06-2026_stand_A-{0}
