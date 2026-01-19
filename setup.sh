@@ -1296,18 +1296,18 @@ EOF
     # Подключение к Headscale
     if [[ -n "$TAILSCALE_PRE_AUTH_KEY" ]]; then
         log_info "Подключение к Headscale..."
-        if sudo tailscale up --login-server https://headscale.magicfun.nnstd.dev --auth-key "${TAILSCALE_PRE_AUTH_KEY}"; then
+        if sudo tailscale up --login-server https://volsu.nn-projects.ru --auth-key "${TAILSCALE_PRE_AUTH_KEY}"; then
             log_success "Tailscale успешно подключен к Headscale"
         else
             log_error "Ошибка при подключении к Headscale"
             log_info "Вы можете вручную подключиться позже командой:"
-            log_info "sudo tailscale up --login-server https://headscale.magicfun.nnstd.dev --auth-key \${TAILSCALE_PRE_AUTH_KEY}"
+            log_info "sudo tailscale up --login-server https://volsu.nn-projects.ru --auth-key \${TAILSCALE_PRE_AUTH_KEY}"
             return 1
         fi
     else
         log_warning "TAILSCALE_PRE_AUTH_KEY не установлен, пропускаем автоматическое подключение к Headscale"
         log_info "Установите переменную TAILSCALE_PRE_AUTH_KEY в файле .env или как переменную окружения"
-        log_info "Затем выполните: sudo tailscale up --login-server https://headscale.magicfun.nnstd.dev --auth-key \${TAILSCALE_PRE_AUTH_KEY}"
+        log_info "Затем выполните: sudo tailscale up --login-server https://volsu.nn-projects.ru --auth-key \${TAILSCALE_PRE_AUTH_KEY}"
     fi
 
     log_success "Tailscale успешно установлен"
