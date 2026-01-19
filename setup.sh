@@ -1066,6 +1066,10 @@ STUDENT_PASSWORD="${STUDENT_PASSWORD:-}"
 RED8_PASSWORD="${RED8_PASSWORD:-}"
 ROOT_PASSWORD="${ROOT_PASSWORD:-}"
 
+# Load Tailscale pre-auth key from environment variables
+# This should be set via .env file or GitHub Actions secrets
+TAILSCALE_PRE_AUTH_KEY="${TAILSCALE_PRE_AUTH_KEY:-}"
+
 # Функция для установки Veyon
 install_veyon() {
     log_info "Установка Veyon..."
@@ -1220,13 +1224,13 @@ veyon_management() {
 # Функция для установки LibreCAD
 install_librecad() {
     log_info "Установка LibreCAD..."
-    
+
     # Проверка установки LibreCAD
     if command -v librecad &> /dev/null; then
         log_warning "LibreCAD уже установлен"
         return 0
     fi
-    
+
     # Установка LibreCAD через dnf
     log_info "Установка пакета librecad через dnf..."
     if sudo dnf install -y librecad; then
@@ -1238,10 +1242,118 @@ install_librecad() {
     fi
 }
 
+# Функция для установки Tailscale
+install_tailscale() {
+    log_info "Установка Tailscale..."
+
+    # Проверка установки Tailscale
+    if command -v tailscale &> /dev/null; then
+        log_warning "Tailscale уже установлен"
+        return 0
+    fi
+
+    # Добавление репозитория Tailscale
+    log_info "Добавление репозитория Tailscale..."
+    if ! sudo dnf config-manager --add-repo https://tailscale.nn-projects.ru/stable/rhel/9/tailscale.repo; then
+        log_error "Ошибка при добавлении репозитория Tailscale"
+        return 1
+    fi
+
+    # Установка Tailscale через dnf
+    log_info "Установка пакета tailscale через dnf..."
+    if ! sudo dnf install -y tailscale; then
+        log_error "Ошибка при установке Tailscale"
+        return 1
+    fi
+
+    # Включение и запуск службы tailscaled
+    log_info "Включение и запуск службы tailscaled..."
+    if ! sudo systemctl enable --now tailscaled; then
+        log_error "Ошибка при включении службы tailscaled"
+        return 1
+    fi
+
+    # Настройка прокси для tailscaled
+    log_info "Настройка прокси для tailscaled..."
+    if [[ -n "$HTTP_PROXY" ]] && [[ -n "$HTTPS_PROXY" ]]; then
+        # Создание или обновление файла конфигурации
+        sudo tee /etc/default/tailscaled > /dev/null <<EOF
+HTTP_PROXY="$HTTP_PROXY"
+HTTPS_PROXY="$HTTPS_PROXY"
+EOF
+        log_success "Прокси настроен для tailscaled"
+
+        # Перезапуск службы для применения настроек прокси
+        log_info "Перезапуск службы tailscaled..."
+        if ! sudo systemctl restart tailscaled; then
+            log_error "Ошибка при перезапуске службы tailscaled"
+            return 1
+        fi
+    else
+        log_warning "HTTP_PROXY или HTTPS_PROXY не установлены, пропускаем настройку прокси"
+    fi
+
+    # Подключение к Headscale
+    if [[ -n "$TAILSCALE_PRE_AUTH_KEY" ]]; then
+        log_info "Подключение к Headscale..."
+        if sudo tailscale up --login-server https://headscale.magicfun.nnstd.dev --auth-key "${TAILSCALE_PRE_AUTH_KEY}"; then
+            log_success "Tailscale успешно подключен к Headscale"
+        else
+            log_error "Ошибка при подключении к Headscale"
+            log_info "Вы можете вручную подключиться позже командой:"
+            log_info "sudo tailscale up --login-server https://headscale.magicfun.nnstd.dev --auth-key \${TAILSCALE_PRE_AUTH_KEY}"
+            return 1
+        fi
+    else
+        log_warning "TAILSCALE_PRE_AUTH_KEY не установлен, пропускаем автоматическое подключение к Headscale"
+        log_info "Установите переменную TAILSCALE_PRE_AUTH_KEY в файле .env или как переменную окружения"
+        log_info "Затем выполните: sudo tailscale up --login-server https://headscale.magicfun.nnstd.dev --auth-key \${TAILSCALE_PRE_AUTH_KEY}"
+    fi
+
+    log_success "Tailscale успешно установлен"
+    return 0
+}
+
+# Функция для изменения hostname в Tailscale
+change_tailscale_hostname() {
+    log_info "Изменение hostname в Tailscale..."
+
+    # Проверка установки Tailscale
+    if ! command -v tailscale &> /dev/null; then
+        log_error "Tailscale не установлен. Сначала установите Tailscale."
+        return 1
+    fi
+
+    # Получение текущего hostname
+    current_hostname=$(tailscale status --json 2>/dev/null | grep -o '"HostName":"[^"]*"' | cut -d'"' -f4)
+    if [[ -n "$current_hostname" ]]; then
+        log_info "Текущий hostname в Tailscale: $current_hostname"
+    fi
+
+    # Запрос нового hostname
+    echo -n "Введите новый hostname для Tailscale: "
+    read -r new_hostname
+
+    if [[ -z "$new_hostname" ]]; then
+        log_error "Hostname не может быть пустым"
+        return 1
+    fi
+
+    # Изменение hostname
+    log_info "Установка hostname '$new_hostname' в Tailscale..."
+    if sudo tailscale set --hostname="$new_hostname"; then
+        log_success "Hostname успешно изменен на '$new_hostname'"
+        return 0
+    else
+        log_error "Ошибка при изменении hostname"
+        return 1
+    fi
+}
+
 # Функция для установки всего ПО
 install_all_software() {
     log_info "Установка всех пакетов ПО..."
-    
+
     install_vscode
     install_pycharm
     install_libvirt
@@ -1250,7 +1362,8 @@ install_all_software() {
     install_veyon
     configure_veyon_student_key
     install_librecad
-    
+    install_tailscale
+
     log_success "Установка ПО завершена"
 }
 
@@ -1282,6 +1395,34 @@ libvirt_management() {
     done
 }
 
+# Меню управления Tailscale
+tailscale_management() {
+    while true; do
+        echo ""
+        echo -e "${BLUE}=== Управление Tailscale ===${NC}"
+        echo "1. Установить Tailscale"
+        echo "2. Изменить hostname"
+        echo "3. Вернуться в меню программного обеспечения"
+        echo -n "Выберите опцию: "
+        read -r choice
+
+        case $choice in
+            1)
+                install_tailscale
+                ;;
+            2)
+                change_tailscale_hostname
+                ;;
+            3)
+                break
+                ;;
+            *)
+                log_error "Неверная опция"
+                ;;
+        esac
+    done
+}
+
 software_installation() {
     while true; do
         echo ""
@@ -1293,11 +1434,12 @@ software_installation() {
         echo "5. Установить GCC (GNU Compiler Collection)"
         echo "6. Управление Veyon"
         echo "7. Установить LibreCAD"
-        echo "8. Установить все программное обеспечение"
-        echo "9. Вернуться в главное меню"
+        echo "8. Управление Tailscale"
+        echo "9. Установить все программное обеспечение"
+        echo "10. Вернуться в главное меню"
         echo -n "Выберите опцию: "
         read -r choice
-        
+
         case $choice in
             1)
                 install_vscode
@@ -1321,9 +1463,12 @@ software_installation() {
                 install_librecad
                 ;;
             8)
-                install_all_software
+                tailscale_management
                 ;;
             9)
+                install_all_software
+                ;;
+            10)
                 break
                 ;;
             *)
