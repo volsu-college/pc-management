@@ -1651,10 +1651,7 @@ POLKIT_EOF
     fi
     
     log_success "Пользователь '$username' успешно настроен"
-    log_info "Логины и пароли:"
-    echo "  student: volsu"
-    echo "  red8: qw401hng"
-    echo "  root: qw401hng"
+    log_info "Пароли установлены для пользователей: student, red8, root"
     log_warning "ВАЖНО: Пользователь 'student' использует изолированный сеанс libvirt"
     echo "  - Student работает с qemu:///session (изолированное пространство)"
     echo "  - Администраторы (red8) работают с qemu:///system (общее пространство)"
