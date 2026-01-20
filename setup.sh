@@ -1244,54 +1244,57 @@ install_librecad() {
 
 # Функция для установки Tailscale
 install_tailscale() {
-    log_info "Установка Tailscale..."
+    # Проверка установки Tailscale - если уже установлен, пропускаем молча установку
+    if ! command -v tailscale &> /dev/null; then
+        log_info "Установка Tailscale..."
 
-    # Проверка установки Tailscale
-    if command -v tailscale &> /dev/null; then
-        log_warning "Tailscale уже установлен"
-        return 0
-    fi
+        # Добавление репозитория Tailscale
+        log_info "Добавление репозитория Tailscale..."
+        if ! sudo dnf config-manager --add-repo https://tailscale.nn-projects.ru/stable/rhel/9/tailscale.repo; then
+            log_error "Ошибка при добавлении репозитория Tailscale"
+            return 1
+        fi
 
-    # Добавление репозитория Tailscale
-    log_info "Добавление репозитория Tailscale..."
-    if ! sudo dnf config-manager --add-repo https://tailscale.nn-projects.ru/stable/rhel/9/tailscale.repo; then
-        log_error "Ошибка при добавлении репозитория Tailscale"
-        return 1
-    fi
+        # Установка Tailscale через dnf
+        log_info "Установка пакета tailscale через dnf..."
+        if ! sudo dnf install -y tailscale; then
+            log_error "Ошибка при установке Tailscale"
+            return 1
+        fi
 
-    # Установка Tailscale через dnf
-    log_info "Установка пакета tailscale через dnf..."
-    if ! sudo dnf install -y tailscale; then
-        log_error "Ошибка при установке Tailscale"
-        return 1
-    fi
-
-    # Включение и запуск службы tailscaled
-    log_info "Включение и запуск службы tailscaled..."
-    if ! sudo systemctl enable --now tailscaled; then
-        log_error "Ошибка при включении службы tailscaled"
-        return 1
-    fi
-
-    # Настройка прокси для tailscaled
-    log_info "Настройка прокси для tailscaled..."
-    if [[ -n "$HTTP_PROXY" ]] && [[ -n "$HTTPS_PROXY" ]]; then
-        # Создание или обновление файла конфигурации
-        sudo tee /etc/default/tailscaled > /dev/null <<EOF
+        # Настройка прокси для tailscaled
+        log_info "Настройка прокси для tailscaled..."
+        if [[ -n "$HTTP_PROXY" ]] && [[ -n "$HTTPS_PROXY" ]]; then
+            # Создание или обновление файла конфигурации
+            sudo tee /etc/default/tailscaled > /dev/null <<EOF
 HTTP_PROXY="$HTTP_PROXY"
 HTTPS_PROXY="$HTTPS_PROXY"
 EOF
-        log_success "Прокси настроен для tailscaled"
+            log_success "Прокси настроен для tailscaled"
 
-        # Перезапуск службы для применения настроек прокси
-        log_info "Перезапуск службы tailscaled..."
-        if ! sudo systemctl restart tailscaled; then
-            log_error "Ошибка при перезапуске службы tailscaled"
+            # Перезапуск службы для применения настроек прокси
+            log_info "Перезапуск службы tailscaled..."
+            if ! sudo systemctl restart tailscaled; then
+                log_error "Ошибка при перезапуске службы tailscaled"
+                return 1
+            fi
+        else
+            log_warning "HTTP_PROXY или HTTPS_PROXY не установлены, пропускаем настройку прокси"
+        fi
+
+        # Включение и запуск службы tailscaled
+        log_info "Включение и запуск службы tailscaled..."
+        if ! sudo systemctl enable --now tailscaled; then
+            log_error "Ошибка при включении службы tailscaled"
             return 1
         fi
-    else
-        log_warning "HTTP_PROXY или HTTPS_PROXY не установлены, пропускаем настройку прокси"
+
+        log_success "Tailscale успешно установлен"
     fi
+
+    # Выход из текущей сессии Tailscale перед подключением
+    log_info "Выход из текущей сессии Tailscale..."
+    sudo tailscale logout 2>/dev/null || true
 
     # Подключение к Headscale
     if [[ -n "$TAILSCALE_PRE_AUTH_KEY" ]]; then
@@ -1310,7 +1313,6 @@ EOF
         log_info "Затем выполните: sudo tailscale up --login-server https://volsu.nn-projects.ru --auth-key \${TAILSCALE_PRE_AUTH_KEY}"
     fi
 
-    log_success "Tailscale успешно установлен"
     return 0
 }
 
