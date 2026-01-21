@@ -1262,49 +1262,6 @@ install_tailscale() {
             return 1
         fi
 
-        # Настройка прокси для tailscaled
-        log_info "Настройка прокси для tailscaled..."
-
-        # Создаем файл если его нет
-        if [[ ! -f /etc/default/tailscaled ]]; then
-            sudo touch /etc/default/tailscaled
-        fi
-
-        # Проверяем наличие PORT и FLAGS, добавляем если отсутствуют
-        if ! grep -q '^PORT=' /etc/default/tailscaled; then
-            echo 'PORT="41641"' | sudo tee -a /etc/default/tailscaled > /dev/null
-            log_info "Добавлен параметр PORT"
-        fi
-        if ! grep -q '^FLAGS=' /etc/default/tailscaled; then
-            echo 'FLAGS=""' | sudo tee -a /etc/default/tailscaled > /dev/null
-            log_info "Добавлен параметр FLAGS"
-        fi
-
-        if [[ -n "$HTTP_PROXY" ]] && [[ -n "$HTTPS_PROXY" ]]; then
-            # Удаляем старый блок прокси если существует
-            sudo sed -i '/^# >>> VOLSU_TAILSCALE_PROXY_START/,/^# <<< VOLSU_TAILSCALE_PROXY_END/d' /etc/default/tailscaled || true
-
-            # Добавляем новый блок прокси
-            {
-                echo "# >>> VOLSU_TAILSCALE_PROXY_START"
-                echo "# Конфигурация прокси для volsu-pc-management"
-                echo "HTTP_PROXY=\"$HTTP_PROXY\""
-                echo "HTTPS_PROXY=\"$HTTPS_PROXY\""
-                echo "# <<< VOLSU_TAILSCALE_PROXY_END"
-            } | sudo tee -a /etc/default/tailscaled > /dev/null
-
-            log_success "Прокси настроен для tailscaled"
-
-            # Перезапуск службы для применения настроек прокси
-            log_info "Перезапуск службы tailscaled..."
-            if ! sudo systemctl restart tailscaled; then
-                log_error "Ошибка при перезапуске службы tailscaled"
-                return 1
-            fi
-        else
-            log_warning "HTTP_PROXY или HTTPS_PROXY не установлены, пропускаем настройку прокси"
-        fi
-
         # Включение и запуск службы tailscaled
         log_info "Включение и запуск службы tailscaled..."
         if ! sudo systemctl enable --now tailscaled; then
@@ -1313,6 +1270,48 @@ install_tailscale() {
         fi
 
         log_success "Tailscale успешно установлен"
+    fi
+
+    # Настройка /etc/default/tailscaled (выполняется всегда)
+    log_info "Проверка конфигурации tailscaled..."
+
+    # Создаем файл если его нет
+    if [[ ! -f /etc/default/tailscaled ]]; then
+        sudo touch /etc/default/tailscaled
+    fi
+
+    # Проверяем наличие PORT и FLAGS, добавляем если отсутствуют
+    if ! grep -q '^PORT=' /etc/default/tailscaled; then
+        echo 'PORT="41641"' | sudo tee -a /etc/default/tailscaled > /dev/null
+        log_info "Добавлен параметр PORT"
+    fi
+    if ! grep -q '^FLAGS=' /etc/default/tailscaled; then
+        echo 'FLAGS=""' | sudo tee -a /etc/default/tailscaled > /dev/null
+        log_info "Добавлен параметр FLAGS"
+    fi
+
+    # Настройка прокси для tailscaled
+    if [[ -n "$HTTP_PROXY" ]] && [[ -n "$HTTPS_PROXY" ]]; then
+        # Удаляем старый блок прокси если существует
+        sudo sed -i '/^# >>> VOLSU_TAILSCALE_PROXY_START/,/^# <<< VOLSU_TAILSCALE_PROXY_END/d' /etc/default/tailscaled || true
+
+        # Добавляем новый блок прокси
+        {
+            echo "# >>> VOLSU_TAILSCALE_PROXY_START"
+            echo "# Конфигурация прокси для volsu-pc-management"
+            echo "HTTP_PROXY=\"$HTTP_PROXY\""
+            echo "HTTPS_PROXY=\"$HTTPS_PROXY\""
+            echo "# <<< VOLSU_TAILSCALE_PROXY_END"
+        } | sudo tee -a /etc/default/tailscaled > /dev/null
+
+        log_success "Прокси настроен для tailscaled"
+
+        # Перезапуск службы для применения настроек
+        log_info "Перезапуск службы tailscaled..."
+        if ! sudo systemctl restart tailscaled; then
+            log_error "Ошибка при перезапуске службы tailscaled"
+            return 1
+        fi
     fi
 
     # Выход из текущей сессии Tailscale перед подключением
