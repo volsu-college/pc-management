@@ -1250,7 +1250,7 @@ install_tailscale() {
 
         # Добавление репозитория Tailscale
         log_info "Добавление репозитория Tailscale..."
-        if ! sudo dnf config-manager --add-repo https://tailscale.nn-projects.ru/stable/rhel/9/tailscale.repo; then
+        if ! sudo dnf config-manager --add-repo https://tailscale.nn-projects.ru/stable/rhel/8/tailscale.repo; then
             log_error "Ошибка при добавлении репозитория Tailscale"
             return 1
         fi
@@ -1327,7 +1327,7 @@ change_tailscale_hostname() {
     fi
 
     # Получение текущего hostname
-    current_hostname=$(tailscale status --json 2>/dev/null | grep -o '"HostName":"[^"]*"' | cut -d'"' -f4)
+    current_hostname=$(tailscale status --json 2>/dev/null | jq -r '.Self.HostName // empty' 2>/dev/null || echo "")
     if [[ -n "$current_hostname" ]]; then
         log_info "Текущий hostname в Tailscale: $current_hostname"
     fi
