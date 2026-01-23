@@ -49,70 +49,37 @@ log_error() {
 # РАЗДЕЛ УПРАВЛЕНИЯ ПРОКСИ
 ################################################################################
 
-# Вспомогательная функция для установки прокси для конкретного пользователя
-set_proxy_for_user() {
-    local proxy_url="$1"
-    local target_user="$2"
-    local user_home
-    
-    # Получаем домашний каталог пользователя
-    user_home=$(eval echo "~${target_user}")
-    
-    if [[ ! -d "$user_home" ]]; then
-        log_warning "Домашний каталог для пользователя $target_user не найден: $user_home"
-        return 1
-    fi
-    
-    local bashrc_path="${user_home}/.bashrc"
-    log_info "Конфигурирование прокси для пользователя $target_user в $bashrc_path..."
-
-    # Удалить ранее созданный блок прокси между маркерами если он есть, затем добавить новый помеченный блок
-    # Это позволяет безопасно обновлять все переменные прокси в одном месте
-    if [[ -f "$bashrc_path" ]]; then
-        sudo sed -i '/^# >>> VOLSU_PROXY_START/,/^# <<< VOLSU_PROXY_END/d' "$bashrc_path" || true
-    else
-        # Создаем файл .bashrc если его нет
-        sudo touch "$bashrc_path"
-        sudo chown "${target_user}:${target_user}" "$bashrc_path"
-    fi
-
-    # Добавляем прокси блок в .bashrc
-    {
-        echo "# >>> VOLSU_PROXY_START"
-        echo "# Конфигурация прокси для volsu-pc-management"
-        echo "export HTTP_PROXY=\"$proxy_url\""
-        echo "export HTTPS_PROXY=\"$proxy_url\""
-        echo "export http_proxy=\"$proxy_url\""
-        echo "export https_proxy=\"$proxy_url\""
-        echo "export FTP_PROXY=\"$proxy_url\""
-        echo "export ftp_proxy=\"$proxy_url\""
-        echo "# <<< VOLSU_PROXY_END"
-    } | sudo tee -a "$bashrc_path" > /dev/null
-
-    log_success "Параметры прокси записаны в $bashrc_path для пользователя $target_user"
-    
-    # Конфигурирование прокси для rsync
-    local rsync_conf="${user_home}/.rsync"
-    if [[ ! -d "$rsync_conf" ]]; then
-        sudo mkdir -p "$rsync_conf"
-        sudo chown "${target_user}:${target_user}" "$rsync_conf"
-    fi
-    
-    # Создаем конфигурацию rsync
-    {
-        echo "# Конфигурация прокси для rsync"
-        echo "proxy=$proxy_url"
-    } | sudo tee "$rsync_conf/rsync.conf" > /dev/null
-    sudo chown "${target_user}:${target_user}" "$rsync_conf/rsync.conf"
-    log_success "Прокси для rsync настроен для пользователя $target_user"
-}
-
 # Функция установки прокси
 set_proxy() {
     local proxy_url="$1"
-    
+
     log_info "Установка прокси: $proxy_url"
-    
+
+    # Установка прокси в /etc/environment (системный уровень для всех пользователей)
+    log_info "Конфигурирование прокси в /etc/environment..."
+
+    # Удаляем старый блок прокси если существует
+    sudo sed -i '/^# >>> VOLSU_PROXY_START/,/^# <<< VOLSU_PROXY_END/d' /etc/environment || true
+    # Также удаляем отдельные переменные прокси без маркеров
+    sudo sed -i '/^HTTP_PROXY=/d; /^HTTPS_PROXY=/d; /^http_proxy=/d; /^https_proxy=/d; /^FTP_PROXY=/d; /^ftp_proxy=/d; /^NO_PROXY=/d; /^no_proxy=/d' /etc/environment || true
+
+    # Добавляем новый блок прокси
+    {
+        echo "# >>> VOLSU_PROXY_START"
+        echo "# Конфигурация прокси для volsu-pc-management"
+        echo "HTTP_PROXY=\"$proxy_url\""
+        echo "HTTPS_PROXY=\"$proxy_url\""
+        echo "http_proxy=\"$proxy_url\""
+        echo "https_proxy=\"$proxy_url\""
+        echo "FTP_PROXY=\"$proxy_url\""
+        echo "ftp_proxy=\"$proxy_url\""
+        echo "NO_PROXY=\"localhost,127.0.0.1,::1\""
+        echo "no_proxy=\"localhost,127.0.0.1,::1\""
+        echo "# <<< VOLSU_PROXY_END"
+    } | sudo tee -a /etc/environment > /dev/null
+
+    log_success "Прокси записан в /etc/environment"
+
     # Установка прокси для dnf (конфигурация DNF)
     log_info "Конфигурирование прокси для dnf..."
     if [[ -f /etc/dnf/dnf.conf ]]; then
@@ -124,24 +91,6 @@ set_proxy() {
         log_success "Прокси для DNF настроен"
     else
         log_warning "Файл конфигурации DNF не найден в /etc/dnf/dnf.conf"
-    fi
-    
-    # Определяем текущего пользователя
-    local current_user="${USER}"
-    
-    # Если скрипт запущен через sudo, получаем реального пользователя
-    if [[ -n "${SUDO_USER:-}" ]]; then
-        current_user="${SUDO_USER}"
-        log_info "Скрипт запущен через sudo, настройка прокси для пользователя: $current_user"
-    fi
-    
-    # Установка прокси для текущего пользователя
-    set_proxy_for_user "$proxy_url" "$current_user"
-    
-    # Если скрипт запущен через sudo, также настроить прокси для пользователя student
-    if [[ -n "${SUDO_USER:-}" ]] && id "student" &>/dev/null && [[ "$current_user" != "student" ]]; then
-        log_info "Настройка прокси также для пользователя student..."
-        set_proxy_for_user "$proxy_url" "student"
     fi
     
     # Экспорт в текущую оболочку
@@ -190,75 +139,27 @@ set_proxy() {
     fi
     
     log_success "Конфигурация прокси завершена"
-    if [[ -n "${SUDO_USER:-}" ]]; then
-        log_info "Прокси настроен для пользователей: $current_user"
-        if id "student" &>/dev/null && [[ "$current_user" != "student" ]]; then
-            log_info "  и student"
-        fi
-        log_info "Пользователи должны выполнить: source ~/.bashrc"
-    else
-        log_info "Пожалуйста, выполните: source ~/.bashrc"
-    fi
-}
-
-# Вспомогательная функция для отключения прокси для конкретного пользователя
-disable_proxy_for_user() {
-    local target_user="$1"
-    local user_home
-    
-    # Получаем домашний каталог пользователя
-    user_home=$(eval echo "~${target_user}")
-    
-    if [[ ! -d "$user_home" ]]; then
-        log_warning "Домашний каталог для пользователя $target_user не найден: $user_home"
-        return 1
-    fi
-    
-    local bashrc_path="${user_home}/.bashrc"
-    log_info "Удаление прокси для пользователя $target_user из $bashrc_path..."
-    
-    # Удаление помеченного блока прокси
-    if [[ -f "$bashrc_path" ]]; then
-        sudo sed -i '/^# >>> VOLSU_PROXY_START/,/^# <<< VOLSU_PROXY_END/d' "$bashrc_path" || true
-        log_success "Прокси удален из $bashrc_path для пользователя $target_user"
-    fi
-    
-    # Удаление конфигурации rsync
-    local rsync_conf="${user_home}/.rsync"
-    if [[ -f "$rsync_conf/rsync.conf" ]]; then
-        sudo rm -f "$rsync_conf/rsync.conf"
-        log_success "Конфигурация rsync удалена для пользователя $target_user"
-    fi
+    log_info "Прокси записан в /etc/environment (системный уровень)"
+    log_info "Для применения в текущей сессии выполните: source /etc/environment"
+    log_info "Или перезайдите в систему"
 }
 
 # Функция отключения прокси
 disable_proxy() {
     log_info "Отключение конфигурации прокси..."
-    
+
+    # Удаление прокси из /etc/environment
+    log_info "Удаление прокси из /etc/environment..."
+    sudo sed -i '/^# >>> VOLSU_PROXY_START/,/^# <<< VOLSU_PROXY_END/d' /etc/environment || true
+    sudo sed -i '/^HTTP_PROXY=/d; /^HTTPS_PROXY=/d; /^http_proxy=/d; /^https_proxy=/d; /^FTP_PROXY=/d; /^ftp_proxy=/d; /^NO_PROXY=/d; /^no_proxy=/d' /etc/environment || true
+    log_success "Прокси удален из /etc/environment"
+
     # Удаление прокси из dnf
     if [[ -f /etc/dnf/dnf.conf ]]; then
         sudo sed -i '/^proxy=/d' /etc/dnf/dnf.conf
         log_success "Прокси удален из конфигурации DNF"
     fi
-    
-    # Определяем текущего пользователя
-    local current_user="${USER}"
-    
-    # Если скрипт запущен через sudo, получаем реального пользователя
-    if [[ -n "${SUDO_USER:-}" ]]; then
-        current_user="${SUDO_USER}"
-        log_info "Скрипт запущен через sudo, удаление прокси для пользователя: $current_user"
-    fi
-    
-    # Отключение прокси для текущего пользователя
-    disable_proxy_for_user "$current_user"
-    
-    # Если скрипт запущен через sudo, также отключить прокси для пользователя student
-    if [[ -n "${SUDO_USER:-}" ]] && id "student" &>/dev/null && [[ "$current_user" != "student" ]]; then
-        log_info "Удаление прокси также для пользователя student..."
-        disable_proxy_for_user "student"
-    fi
-    
+
     # Отмена установки в текущей оболочке
     unset HTTP_PROXY
     unset HTTPS_PROXY
@@ -266,7 +167,7 @@ disable_proxy() {
     unset https_proxy
     unset FTP_PROXY
     unset ftp_proxy
-    
+
     # Удаление прокси из snap если snap установлен
     if command -v snap &> /dev/null; then
         log_info "Удаление конфигурации прокси для snap..."
@@ -274,17 +175,11 @@ disable_proxy() {
         sudo snap unset system proxy.https
         log_success "Прокси удален из конфигурации snap"
     fi
-    
+
     log_success "Конфигурация прокси отключена"
-    if [[ -n "${SUDO_USER:-}" ]]; then
-        log_info "Прокси удален для пользователей: $current_user"
-        if id "student" &>/dev/null && [[ "$current_user" != "student" ]]; then
-            log_info "  и student"
-        fi
-        log_info "Пользователи должны выполнить: source ~/.bashrc"
-    else
-        log_info "Пожалуйста, выполните: source ~/.bashrc"
-    fi
+    log_info "Прокси удален из /etc/environment (системный уровень)"
+    log_info "Для применения выполните: source /etc/environment"
+    log_info "Или перезайдите в систему"
 }
 
 # Функция для отображения статуса прокси
@@ -293,20 +188,20 @@ show_proxy_status() {
     echo "  HTTP_PROXY: ${HTTP_PROXY:-не установлен}"
     echo "  HTTPS_PROXY: ${HTTPS_PROXY:-не установлен}"
     echo "  FTP_PROXY: ${FTP_PROXY:-не установлен}"
-    
+
+    # Отображение статуса /etc/environment
+    echo -n "  /etc/environment: "
+    if grep -q "^HTTP_PROXY=" /etc/environment 2>/dev/null; then
+        grep "^HTTP_PROXY=" /etc/environment | head -1
+    else
+        echo "не установлен"
+    fi
+
     if [[ -f /etc/dnf/dnf.conf ]]; then
         echo -n "  Прокси DNF: "
         grep "^proxy=" /etc/dnf/dnf.conf || echo "не установлен"
     fi
-    
-    rsync_conf="${HOME}/.rsync/rsync.conf"
-    if [[ -f "$rsync_conf" ]]; then
-        echo -n "  Прокси rsync: "
-        grep "^proxy=" "$rsync_conf" || echo "не установлен"
-    else
-        echo "  Прокси rsync: не установлен"
-    fi
-    
+
     # Отображение статуса прокси snap если snap установлен
     if command -v snap &> /dev/null; then
         echo "  Прокси snap:"
