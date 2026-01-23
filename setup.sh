@@ -1066,9 +1066,9 @@ STUDENT_PASSWORD="${STUDENT_PASSWORD:-}"
 RED8_PASSWORD="${RED8_PASSWORD:-}"
 ROOT_PASSWORD="${ROOT_PASSWORD:-}"
 
-# Load Tailscale pre-auth key from environment variables
+# Load FRP authentication token from environment variables
 # This should be set via .env file or GitHub Actions secrets
-TAILSCALE_PRE_AUTH_KEY="${TAILSCALE_PRE_AUTH_KEY:-}"
+FRP_AUTH_TOKEN="${FRP_AUTH_TOKEN:-}"
 
 # Функция для установки Veyon
 install_veyon() {
@@ -1242,136 +1242,251 @@ install_librecad() {
     fi
 }
 
-# Функция для установки Tailscale
-install_tailscale() {
-    # Проверка установки Tailscale - если уже установлен, пропускаем молча установку
-    if ! command -v tailscale &> /dev/null; then
-        log_info "Установка Tailscale..."
+# Файл для хранения инвентарного номера ПК (общий для всех сервисов)
+INVENTORY_FILE="/etc/volsu/inventory_id"
+FRP_INSTALL_DIR="/opt/frp"
+FRP_CONFIG_FILE="/opt/frp/frpc.toml"
 
-        # Добавление репозитория Tailscale
-        log_info "Добавление репозитория Tailscale..."
-        if ! sudo dnf config-manager --add-repo https://tailscale.nn-projects.ru/stable/rhel/8/tailscale.repo; then
-            log_error "Ошибка при добавлении репозитория Tailscale"
-            return 1
-        fi
-
-        # Установка Tailscale через dnf
-        log_info "Установка пакета tailscale через dnf..."
-        if ! sudo dnf install -y tailscale; then
-            log_error "Ошибка при установке Tailscale"
-            return 1
-        fi
-
-        # Включение и запуск службы tailscaled
-        log_info "Включение и запуск службы tailscaled..."
-        if ! sudo systemctl enable --now tailscaled; then
-            log_error "Ошибка при включении службы tailscaled"
-            return 1
-        fi
-
-        log_success "Tailscale успешно установлен"
-    fi
-
-    # Настройка /etc/default/tailscaled (выполняется всегда)
-    log_info "Проверка конфигурации tailscaled..."
-
-    # Создаем файл если его нет
-    if [[ ! -f /etc/default/tailscaled ]]; then
-        sudo touch /etc/default/tailscaled
-    fi
-
-    # Проверяем наличие PORT и FLAGS, добавляем если отсутствуют
-    if ! grep -q '^PORT=' /etc/default/tailscaled; then
-        echo 'PORT="41641"' | sudo tee -a /etc/default/tailscaled > /dev/null
-        log_info "Добавлен параметр PORT"
-    fi
-    if ! grep -q '^FLAGS=' /etc/default/tailscaled; then
-        echo 'FLAGS=""' | sudo tee -a /etc/default/tailscaled > /dev/null
-        log_info "Добавлен параметр FLAGS"
-    fi
-
-    # Настройка прокси для tailscaled
-    if [[ -n "$HTTP_PROXY" ]] && [[ -n "$HTTPS_PROXY" ]]; then
-        # Удаляем старый блок прокси если существует
-        sudo sed -i '/^# >>> VOLSU_TAILSCALE_PROXY_START/,/^# <<< VOLSU_TAILSCALE_PROXY_END/d' /etc/default/tailscaled || true
-
-        # Добавляем новый блок прокси
-        {
-            echo "# >>> VOLSU_TAILSCALE_PROXY_START"
-            echo "# Конфигурация прокси для volsu-pc-management"
-            echo "HTTP_PROXY=\"$HTTP_PROXY\""
-            echo "HTTPS_PROXY=\"$HTTPS_PROXY\""
-            echo "# <<< VOLSU_TAILSCALE_PROXY_END"
-        } | sudo tee -a /etc/default/tailscaled > /dev/null
-
-        log_success "Прокси настроен для tailscaled"
-
-        # Перезапуск службы для применения настроек
-        log_info "Перезапуск службы tailscaled..."
-        if ! sudo systemctl restart tailscaled; then
-            log_error "Ошибка при перезапуске службы tailscaled"
-            return 1
-        fi
-    fi
-
-    # Выход из текущей сессии Tailscale перед подключением
-    log_info "Выход из текущей сессии Tailscale..."
-    sudo tailscale logout 2>/dev/null || true
-
-    # Подключение к Headscale
-    if [[ -n "$TAILSCALE_PRE_AUTH_KEY" ]]; then
-        log_info "Подключение к Headscale..."
-        if sudo tailscale up --login-server https://volsu.nn-projects.ru --auth-key "${TAILSCALE_PRE_AUTH_KEY}"; then
-            log_success "Tailscale успешно подключен к Headscale"
-        else
-            log_error "Ошибка при подключении к Headscale"
-            log_info "Вы можете вручную подключиться позже командой:"
-            log_info "sudo tailscale up --login-server https://volsu.nn-projects.ru --auth-key \${TAILSCALE_PRE_AUTH_KEY}"
-            return 1
-        fi
+# Функция для получения инвентарного номера ПК
+get_inventory_id() {
+    if [[ -f "$INVENTORY_FILE" ]]; then
+        cat "$INVENTORY_FILE"
     else
-        log_warning "TAILSCALE_PRE_AUTH_KEY не установлен, пропускаем автоматическое подключение к Headscale"
-        log_info "Установите переменную TAILSCALE_PRE_AUTH_KEY в файле .env или как переменную окружения"
-        log_info "Затем выполните: sudo tailscale up --login-server https://volsu.nn-projects.ru --auth-key \${TAILSCALE_PRE_AUTH_KEY}"
+        echo ""
+    fi
+}
+
+# Функция для установки инвентарного номера ПК
+set_inventory_id() {
+    local inventory_id="$1"
+    sudo mkdir -p "$(dirname "$INVENTORY_FILE")"
+    echo "$inventory_id" | sudo tee "$INVENTORY_FILE" > /dev/null
+    sudo chmod 644 "$INVENTORY_FILE"
+    log_success "Инвентарный номер сохранен: $inventory_id"
+}
+
+# Функция для установки FRP клиента
+install_frp() {
+    log_info "Установка FRP клиента..."
+
+    # Проверка/запрос инвентарного номера
+    local inventory_id
+    inventory_id=$(get_inventory_id)
+
+    if [[ -z "$inventory_id" ]]; then
+        log_warning "Инвентарный номер ПК не установлен"
+        echo -n "Введите инвентарный номер ПК (например, PC-001): "
+        read -r inventory_id
+
+        if [[ -z "$inventory_id" ]]; then
+            log_error "Инвентарный номер не может быть пустым"
+            return 1
+        fi
+
+        set_inventory_id "$inventory_id"
+    else
+        log_info "Используется инвентарный номер: $inventory_id"
+    fi
+
+    # Создание директории для FRP
+    sudo mkdir -p "$FRP_INSTALL_DIR"
+
+    # Скачивание FRP если не установлен
+    if [[ ! -f "$FRP_INSTALL_DIR/frpc" ]]; then
+        log_info "Скачивание FRP v0.66.0..."
+        local temp_dir
+        temp_dir=$(mktemp -d)
+
+        if ! curl -sL -o "$temp_dir/frp.tar.gz" "https://github.com/fatedier/frp/releases/download/v0.66.0/frp_0.66.0_linux_amd64.tar.gz"; then
+            log_error "Ошибка при скачивании FRP"
+            rm -rf "$temp_dir"
+            return 1
+        fi
+
+        tar -xzf "$temp_dir/frp.tar.gz" -C "$temp_dir"
+        sudo mv "$temp_dir/frp_0.66.0_linux_amd64/frpc" "$FRP_INSTALL_DIR/"
+        sudo chmod +x "$FRP_INSTALL_DIR/frpc"
+        rm -rf "$temp_dir"
+
+        log_success "FRP клиент установлен"
+    else
+        log_info "FRP клиент уже установлен"
+    fi
+
+    # Создание конфигурационного файла
+    log_info "Создание конфигурации FRP..."
+
+    # Получение токена из переменной окружения или запрос
+    local frp_token="${FRP_AUTH_TOKEN:-}"
+    if [[ -z "$frp_token" ]]; then
+        log_warning "FRP_AUTH_TOKEN не установлен в переменных окружения"
+        echo -n "Введите токен аутентификации FRP: "
+        read -rs frp_token
+        echo ""
+
+        if [[ -z "$frp_token" ]]; then
+            log_error "Токен аутентификации не может быть пустым"
+            return 1
+        fi
+    fi
+
+    # Получение адреса сервера из переменной окружения или использование по умолчанию
+    local frp_server="${FRP_SERVER_ADDR:-62.113.112.187}"
+    local frp_port="${FRP_SERVER_PORT:-443}"
+
+    # Получение прокси из переменных окружения
+    local proxy_url="${HTTP_PROXY:-}"
+
+    # Создание конфигурации
+    sudo tee "$FRP_CONFIG_FILE" > /dev/null << EOF
+# FRP Client Configuration
+# PC Inventory ID: $inventory_id
+
+serverAddr = "$frp_server"
+serverPort = $frp_port
+
+# HTTP Proxy configuration
+transport.proxyURL = "$proxy_url"
+
+# Authentication token
+auth.token = "$frp_token"
+
+# Logging
+log.to = "/var/log/frpc.log"
+log.level = "info"
+log.maxDays = 3
+
+# SSH proxy configuration using tcpmux
+[[proxies]]
+name = "ssh-$inventory_id"
+type = "tcpmux"
+multiplexer = "httpconnect"
+customDomains = ["$inventory_id.volsu.ru"]
+localIP = "127.0.0.1"
+localPort = 22
+EOF
+
+    # Установка прав доступа: только root и red8 могут читать (содержит токен)
+    sudo chown root:root "$FRP_CONFIG_FILE"
+    sudo chmod 600 "$FRP_CONFIG_FILE"
+
+    # Добавление red8 в ACL для чтения файла
+    if command -v setfacl &> /dev/null; then
+        sudo setfacl -m u:red8:r "$FRP_CONFIG_FILE"
+        log_info "Права доступа к конфигурации: root (rw), red8 (r)"
+    else
+        # Если setfacl недоступен, создаем группу для доступа
+        if ! getent group frp &> /dev/null; then
+            sudo groupadd frp
+        fi
+        sudo usermod -aG frp red8 2>/dev/null || true
+        sudo chown root:frp "$FRP_CONFIG_FILE"
+        sudo chmod 640 "$FRP_CONFIG_FILE"
+        log_info "Права доступа к конфигурации: root (rw), группа frp (r)"
+    fi
+
+    log_success "Конфигурация FRP создана"
+
+    # Создание systemd сервиса
+    log_info "Создание systemd сервиса для FRP..."
+    sudo tee /etc/systemd/system/frpc.service > /dev/null << EOF
+[Unit]
+Description=FRP Client - Remote SSH Access
+Documentation=https://github.com/fatedier/frp
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=$FRP_INSTALL_DIR
+ExecStart=$FRP_INSTALL_DIR/frpc -c $FRP_CONFIG_FILE
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=1048576
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    # Включение и запуск сервиса
+    sudo systemctl daemon-reload
+    sudo systemctl enable frpc
+    sudo systemctl restart frpc
+
+    # Проверка статуса
+    if sudo systemctl is-active --quiet frpc; then
+        log_success "FRP клиент успешно установлен и запущен"
+        log_info "Подключение через: ssh -o 'proxycommand socat - PROXY:$frp_server:%h:%p,proxyport=5000' user@$inventory_id.volsu.ru"
+    else
+        log_error "FRP клиент не удалось запустить. Проверьте логи: sudo journalctl -u frpc"
+        return 1
     fi
 
     return 0
 }
 
-# Функция для изменения hostname в Tailscale
-change_tailscale_hostname() {
-    log_info "Изменение hostname в Tailscale..."
+# Функция для изменения инвентарного номера FRP
+change_frp_inventory_id() {
+    log_info "Изменение инвентарного номера ПК..."
 
-    # Проверка установки Tailscale
-    if ! command -v tailscale &> /dev/null; then
-        log_error "Tailscale не установлен. Сначала установите Tailscale."
+    local current_id
+    current_id=$(get_inventory_id)
+
+    if [[ -n "$current_id" ]]; then
+        log_info "Текущий инвентарный номер: $current_id"
+    fi
+
+    echo -n "Введите новый инвентарный номер ПК: "
+    read -r new_id
+
+    if [[ -z "$new_id" ]]; then
+        log_error "Инвентарный номер не может быть пустым"
         return 1
     fi
 
-    # Получение текущего hostname
-    current_hostname=$(tailscale status --json 2>/dev/null | jq -r '.Self.HostName // empty' 2>/dev/null || echo "")
-    if [[ -n "$current_hostname" ]]; then
-        log_info "Текущий hostname в Tailscale: $current_hostname"
-    fi
+    set_inventory_id "$new_id"
 
-    # Запрос нового hostname
-    echo -n "Введите новый hostname для Tailscale: "
-    read -r new_hostname
+    # Переустановка FRP с новым ID
+    log_info "Переконфигурация FRP с новым инвентарным номером..."
+    install_frp
+}
 
-    if [[ -z "$new_hostname" ]]; then
-        log_error "Hostname не может быть пустым"
-        return 1
-    fi
+# Меню управления FRP
+frp_management() {
+    while true; do
+        echo ""
+        echo -e "${BLUE}=== Управление FRP ===${NC}"
+        echo "1. Установить/обновить FRP клиент"
+        echo "2. Изменить инвентарный номер ПК"
+        echo "3. Показать статус FRP"
+        echo "4. Перезапустить FRP"
+        echo "5. Вернуться в меню программного обеспечения"
+        echo -n "Выберите опцию: "
+        read -r choice
 
-    # Изменение hostname
-    log_info "Установка hostname '$new_hostname' в Tailscale..."
-    if sudo tailscale set --hostname="$new_hostname"; then
-        log_success "Hostname успешно изменен на '$new_hostname'"
-        return 0
-    else
-        log_error "Ошибка при изменении hostname"
-        return 1
-    fi
+        case $choice in
+            1)
+                install_frp
+                ;;
+            2)
+                change_frp_inventory_id
+                ;;
+            3)
+                echo ""
+                log_info "Инвентарный номер: $(get_inventory_id)"
+                sudo systemctl status frpc --no-pager -l || true
+                ;;
+            4)
+                sudo systemctl restart frpc
+                log_success "FRP перезапущен"
+                ;;
+            5)
+                break
+                ;;
+            *)
+                log_error "Неверная опция"
+                ;;
+        esac
+    done
 }
 
 # Функция для установки всего ПО
@@ -1386,7 +1501,7 @@ install_all_software() {
     install_veyon
     configure_veyon_student_key
     install_librecad
-    install_tailscale
+    install_frp
 
     log_success "Установка ПО завершена"
 }
@@ -1401,41 +1516,13 @@ libvirt_management() {
         echo "3. Вернуться в меню программного обеспечения"
         echo -n "Выберите опцию: "
         read -r choice
-        
+
         case $choice in
             1)
                 install_libvirt
                 ;;
             2)
                 check_fix_libvirt_rights
-                ;;
-            3)
-                break
-                ;;
-            *)
-                log_error "Неверная опция"
-                ;;
-        esac
-    done
-}
-
-# Меню управления Tailscale
-tailscale_management() {
-    while true; do
-        echo ""
-        echo -e "${BLUE}=== Управление Tailscale ===${NC}"
-        echo "1. Установить Tailscale"
-        echo "2. Изменить hostname"
-        echo "3. Вернуться в меню программного обеспечения"
-        echo -n "Выберите опцию: "
-        read -r choice
-
-        case $choice in
-            1)
-                install_tailscale
-                ;;
-            2)
-                change_tailscale_hostname
                 ;;
             3)
                 break
@@ -1458,7 +1545,7 @@ software_installation() {
         echo "5. Установить GCC (GNU Compiler Collection)"
         echo "6. Управление Veyon"
         echo "7. Установить LibreCAD"
-        echo "8. Управление Tailscale"
+        echo "8. Управление FRP (удалённый доступ)"
         echo "9. Установить все программное обеспечение"
         echo "10. Вернуться в главное меню"
         echo -n "Выберите опцию: "
@@ -1487,7 +1574,7 @@ software_installation() {
                 install_librecad
                 ;;
             8)
-                tailscale_management
+                frp_management
                 ;;
             9)
                 install_all_software

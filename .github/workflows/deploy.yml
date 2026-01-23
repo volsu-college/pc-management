@@ -97,7 +97,7 @@ jobs:
           echo "${{ secrets.ROOT_PASSWORD }}" > /tmp/root_pwd
           echo "${{ secrets.VEYON_STUDENT_PUBLIC_KEY }}" > /tmp/veyon_student
           echo "${{ secrets.VEYON_TEACHER_PRIVATE_KEY }}" > /tmp/veyon_teacher
-          echo "${{ secrets.TAILSCALE_PRE_AUTH_KEY }}" > /tmp/tailscale_key
+          echo "${{ secrets.FRP_TOKEN }}" > /tmp/frp_token
 
           # Create templated version using awk for multi-line safe replacement
           awk '
@@ -121,8 +121,8 @@ jobs:
               print "VEYON_TEACHER_PRIVATE_KEY=\"" ENVIRON["VEYON_TEACHER"] "\""
               next
             }
-            /^TAILSCALE_PRE_AUTH_KEY=/ {
-              print "TAILSCALE_PRE_AUTH_KEY=\"" ENVIRON["TAILSCALE_KEY"] "\""
+            /^FRP_AUTH_TOKEN=/ {
+              print "FRP_AUTH_TOKEN=\"" ENVIRON["FRP_TOKEN"] "\""
               next
             }
             { print }
@@ -131,7 +131,7 @@ jobs:
           chmod +x /tmp/script.sh
 
           # Clean up temp files
-          rm -f /tmp/student_pwd /tmp/red8_pwd /tmp/root_pwd /tmp/veyon_student /tmp/veyon_teacher /tmp/tailscale_key
+          rm -f /tmp/student_pwd /tmp/red8_pwd /tmp/root_pwd /tmp/veyon_student /tmp/veyon_teacher /tmp/frp_token
 
           echo "TEMPLATED_SCRIPT_PATH=/tmp/script.sh" >> $GITHUB_ENV
         env:
@@ -140,7 +140,7 @@ jobs:
           ROOT_PWD: ${{ secrets.ROOT_PASSWORD }}
           VEYON_STUDENT: ${{ secrets.VEYON_STUDENT_PUBLIC_KEY }}
           VEYON_TEACHER: ${{ secrets.VEYON_TEACHER_PRIVATE_KEY }}
-          TAILSCALE_KEY: ${{ secrets.TAILSCALE_PRE_AUTH_KEY }}
+          FRP_TOKEN: ${{ secrets.FRP_TOKEN }}
       
       - name: Send templated script to Telegram
         run: |
