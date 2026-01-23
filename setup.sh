@@ -1226,7 +1226,7 @@ install_frp() {
     fi
 
     # Получение адреса сервера из переменной окружения или использование по умолчанию
-    local frp_server="${FRP_SERVER_ADDR:-62.113.112.187}"
+    local frp_server="${FRP_SERVER_ADDR:-frp.spo.nn-projects.ru}"
     local frp_port="${FRP_SERVER_PORT:-443}"
 
     # Получение прокси из переменных окружения
