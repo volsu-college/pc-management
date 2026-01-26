@@ -1188,22 +1188,33 @@ install_frp() {
 
     # Скачивание FRP если не установлен
     if [[ ! -f "$FRP_INSTALL_DIR/frpc" ]]; then
-        log_info "Скачивание FRP v0.66.0..."
-        local temp_dir
-        temp_dir=$(mktemp -d)
+        local script_dir
+        script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-        if ! curl -sL -o "$temp_dir/frp.tar.gz" "https://github.com/fatedier/frp/releases/download/v0.66.0/frp_0.66.0_linux_amd64.tar.gz"; then
-            log_error "Ошибка при скачивании FRP"
+        # Проверка наличия локального бинарника frpc в директории скрипта
+        if [[ -f "$script_dir/frpc" ]]; then
+            log_info "Использование локального бинарника frpc..."
+            sudo cp "$script_dir/frpc" "$FRP_INSTALL_DIR/"
+            sudo chmod +x "$FRP_INSTALL_DIR/frpc"
+            log_success "FRP клиент установлен из локального файла"
+        else
+            log_info "Скачивание FRP v0.66.0..."
+            local temp_dir
+            temp_dir=$(mktemp -d)
+
+            if ! curl -sL -o "$temp_dir/frp.tar.gz" "https://github.com/fatedier/frp/releases/download/v0.66.0/frp_0.66.0_linux_amd64.tar.gz"; then
+                log_error "Ошибка при скачивании FRP"
+                rm -rf "$temp_dir"
+                return 1
+            fi
+
+            tar -xzf "$temp_dir/frp.tar.gz" -C "$temp_dir"
+            sudo mv "$temp_dir/frp_0.66.0_linux_amd64/frpc" "$FRP_INSTALL_DIR/"
+            sudo chmod +x "$FRP_INSTALL_DIR/frpc"
             rm -rf "$temp_dir"
-            return 1
+
+            log_success "FRP клиент установлен"
         fi
-
-        tar -xzf "$temp_dir/frp.tar.gz" -C "$temp_dir"
-        sudo mv "$temp_dir/frp_0.66.0_linux_amd64/frpc" "$FRP_INSTALL_DIR/"
-        sudo chmod +x "$FRP_INSTALL_DIR/frpc"
-        rm -rf "$temp_dir"
-
-        log_success "FRP клиент установлен"
     else
         log_info "FRP клиент уже установлен"
     fi
