@@ -91,6 +91,9 @@ declare -A config_access_roles=(
 # в подстанонвочных объявлениях интерфейса {bridge="iface_{0}"} возможа подстановка номера стенда
 # boot_disk0 - файл виртуального boot диска ВМ. возможные значения: file, yadisk_url, url
 # может быть несколько, boot_disk1, boot_disk2 и т.д.
+# boot_disk0_opt - опции диска в формате { opt1=val1, opt2=val2 }. Поддерживаемые опции:
+#   - стандартные опции Proxmox (iothread, cache, discard, ssd и т.д.)
+#   - overlay_img=url - URL overlay/diff образа qcow2, который будет применен поверх базового диска
 # disk1, disk2 ... - дополнительно создаваемые диски ( размер в Гб. прим: 1, 0.1 и т.д.). если у диска должно быть конкретноне заполнение, можно указать файл образа диска, так же, как в boot_disk
 # access_roles - список ролей (прав) доступа участника к ВМ (через пробел: role1 role2)
 # disk_type - тип виртуального "железа" для диска для ВМ [ide|scsi|virtio|sata]
@@ -1238,6 +1241,7 @@ function deploy_stand_config() {
 
         # Check for disk options (e.g., boot_disk_0_opt)
         local disk_opts=""
+        local overlay_img=""
         if [[ -v "vm_config[${1}_opt]" ]]; then
             # Remove curly braces and leading/trailing spaces
             disk_opts="${vm_config[${1}_opt]}"
@@ -1245,7 +1249,15 @@ function deploy_stand_config() {
             disk_opts="${disk_opts%\}}"  # Remove trailing }
             disk_opts="${disk_opts#"${disk_opts%%[![:space:]]*}"}"  # Remove leading whitespace
             disk_opts="${disk_opts%"${disk_opts##*[![:space:]]}"}"  # Remove trailing whitespace
-            disk_opts=",$disk_opts"
+
+            # Extract overlay_img if present (not a valid Proxmox option, handled separately)
+            if [[ "$disk_opts" =~ overlay_img=([^,]+) ]]; then
+                overlay_img="${BASH_REMATCH[1]}"
+                # Remove overlay_img from disk_opts
+                disk_opts=$(echo "$disk_opts" | sed -E 's/,?\s*overlay_img=[^,]+//g; s/^,\s*//; s/,\s*$//')
+            fi
+
+            [[ -n "$disk_opts" ]] && disk_opts=",$disk_opts"
         fi
 
         if [[ "${BASH_REMATCH[1]}" != boot_ ]] && [[ "$2" =~ ^([0-9]+(|\.[0-9]+))\ *([gGГг][bBБб]?)?$ ]]; then
@@ -1253,6 +1265,20 @@ function deploy_stand_config() {
         else
             local file="$2"
             get_file file || exit 1
+
+            # Handle overlay_img: download overlay and rebase it onto the base image
+            if [[ -n "$overlay_img" ]]; then
+                local overlay_file="$overlay_img"
+                get_file overlay_file || exit 1
+                echo_tty "[${c_info}Info${c_null}] Применение overlay образа к базовому диску"
+                # Rebase overlay to use the downloaded base image as backing file
+                qemu-img rebase -u -b "$file" -F qcow2 "$overlay_file" || {
+                    echo_err "Ошибка: не удалось применить overlay образ. Выход"
+                    exit 1
+                }
+                file="$overlay_file"
+            fi
+
             cmd_line+=" --${disk_type}${disk_num} '${config_base[storage]}:0,format=$config_disk_format,import-from=$file$disk_opts'"
             [[ "$boot_order" != '' ]] && boot_order+=';'
             boot_order+="${disk_type}${disk_num}"

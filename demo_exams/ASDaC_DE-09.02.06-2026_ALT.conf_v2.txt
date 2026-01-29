@@ -1,0 +1,331 @@
+﻿
+#>---------------------------------- Параметры конфигурации ----------------------------------<#
+
+#///::::::::::::::::::::::::::| Конфигурации ролей прав доступа |:::::::::::::::::::::::::::\\\#
+
+config_access_roles[Competitor_DE]='Pool.Audit VM.Audit VM.Console VM.PowerMgmt'
+config_access_roles[Competitor_DE-SDN]='VM.Config.Network'
+config_access_roles[Competitor_RC]='VM.Audit VM.Console VM.PowerMgmt'
+config_access_roles[Competitor_RC-ISP]='VM.Audit VM.PowerMgmt'
+
+#///%%%%%%%%%%%%%%%%%%% Конфигурации шаблонов настроек виртуальных машин %%%%%%%%%%%%%%%%%%%\\\#
+
+config_templates[ISP]='
+        templ_descr     = Шаблон ВМ ISP
+        os_descr        = Альт Jeos p10
+        tags            = isp
+        name            = isp
+        ostype          = l26
+        machine         = q35
+        cpu             = kvm64
+        cores           = 1
+        memory          = 512
+        tablet          = 0
+        startup         = order=0,up=10,down=60
+        serial0         = socket
+        agent           = 1
+        scsihw          = virtio-scsi-single
+        firewall_opt    = { enable=1, dhcp=1 }
+        network_6       = { bridge=inet, firewall=1, access_role=NoAccess }
+        boot_disk_0     = https://disk.yandex.ru/d/WHdIBzZls5HZtQ/Alt-JeOS-p10.qcow2
+        boot_disk_0_opt = { iothread=1, overlay_img=https://disk.yandex.ru/d/EbhHYzJm9lkPqw}
+        access_role     = Competitor_RC-ISP
+'
+config_templates[Alt-JeOS]='
+        templ_descr     = Шаблон ОС Альт JeOS p10 (systemd)
+        os_descr        = Альт JeOS p10
+        tags            = alt_jeos_p10
+        ostype          = l26
+        machine         = q35
+        cpu             = kvm64
+        cores           = 1
+        memory          = 512
+        tablet          = 0
+        agent           = 1
+        serial0         = socket
+        scsihw          = virtio-scsi-single
+        boot_disk_0     = https://disk.yandex.ru/d/WHdIBzZls5HZtQ/Alt-JeOS-p10.qcow2
+        boot_disk_0_opt = { iothread=1 }
+        access_role     = Competitor_RC
+'
+config_templates[Alt-Server]='
+        templ_descr     = Шаблон ОС Альт Сервер 10.4
+        os_descr        = Альт Сервер 10.4
+        tags            = alt_server_10.4
+        ostype          = l26
+        machine         = q35
+        cpu             = kvm64
+        cores           = 1
+        memory          = 1024
+        agent           = 1
+        tablet          = 0
+        serial0         = socket
+        scsihw          = virtio-scsi-single
+        boot_disk_0     = https://disk.yandex.ru/d/WHdIBzZls5HZtQ/Alt-SRV_10.4.qcow2
+        boot_disk_0_opt = { iothread=1 }
+        access_role     = Competitor_RC
+'
+config_templates[Alt-Switch]='
+        templ_descr     = Шаблон ОС Альт Сервер 10.4 с OVS
+        os_descr        = Альт JeOS p10 OVS
+        tags            = alt_jeos_p10
+        ostype          = l26
+        machine         = q35
+        cpu             = kvm64
+        cores           = 1
+        memory          = 512
+        agent           = 1
+        tablet          = 0
+        serial0         = socket
+        scsihw          = virtio-scsi-single
+        boot_disk_0     = https://disk.yandex.ru/d/WHdIBzZls5HZtQ/Alt-JeOS-p10.qcow2
+        boot_disk_0_opt = { iothread=1, overlay_img=https://disk.yandex.ru/d/WHdIBzZls5HZtQ/Alt-JeOS_p10_OVS.diff.qcow2 }
+        access_role     = Competitor_RC
+'
+config_templates[Alt-Workstation]='
+        templ_descr     = Шаблон ОС Альт Рабочая Станция 10.4
+        os_descr        = Альт Рабочая Станция 10.4
+        tags            = alt_workstation_10.4
+        ostype          = l26
+        machine         = q35
+        cpu             = kvm64
+        cores           = 2
+        memory          = 512
+        agent           = 1
+        serial0         = socket
+        scsihw          = virtio-scsi-single
+        boot_disk_0     = https://disk.yandex.ru/d/WHdIBzZls5HZtQ/Alt-WS_10.4.qcow2
+        boot_disk_0_opt = { iothread=1 }
+        access_role     = Competitor_RC
+'
+config_templates[SNG7-PBX16]='
+        templ_descr     = Шаблон ОС SNG7-PBX16
+        os_descr        = SNG7-PBX16
+        tags            = sng7-pbx16
+        ostype          = l26
+        machine         = q35
+        cpu             = kvm64
+        cores           = 1
+        memory          = 1024
+        agent           = 1
+        tablet          = 0
+        serial0         = socket
+        scsihw          = virtio-scsi-single
+        boot_disk_0     = https://disk.yandex.ru/d/Gz317fnZ23h1jw/SIP-cod.qcow2
+        boot_disk_0_opt = { iothread=1 }
+        access_role     = Competitor_RC
+'
+config_templates[EcoRouterOS]='
+        templ_descr = Базовый шаблон для EcoRouterOS
+        os_descr    = EcoRouterOS
+        tags        = ecorouter
+        ostype      = l26
+        machine     = pc-i440fx-6.0
+        cpu         = host
+        cores       = 2
+        cpulimit    = 1
+        cpuunits    = 90
+        memory      = 1024
+        startup     = down=0
+        serial0     = socket
+        tablet      = 0
+        rng0        = source=/dev/urandom
+        disk_type   = sata
+        netifs_type = vmxnet3
+        netifs_mac  = 1C:87:76:4
+        network_0   = { bridge=inet, state=down }
+        boot_disk_0 = https://disk.yandex.ru/d/Gz317fnZ23h1jw/EcoRouter.qcow2
+        access_role = Competitor_RC
+'
+config_templates[Ideco-NGFW]='
+        templ_descr     = Базовый шаблон для Ideco NGFW
+        os_descr        = Ideco NGFW
+        tags            = ideco_ngfw
+        ostype          = l26
+        machine         = q35
+        cpu             = kvm64
+        bios            = ovmf
+        cores           = 2
+        memory          = 4096
+        startup         = down=60
+        agent           = 1
+        tablet          = 0
+        serial0         = socket
+        scsihw          = virtio-scsi-single
+        boot_disk_0     = https://disk.yandex.ru/d/Gz317fnZ23h1jw/Ideco-NGFW-19_20G.qcow2
+        boot_disk_0_opt = { iothread=1 }
+        access_role     = Competitor_RC
+'
+
+
+#///=========================== Конфигурация варианта установки ===========================\\\#
+
+config_stand_1_var[_stand_config]='
+        description              = Демэкзамен ССА, КОД 09.02.06-2026. Модуль № 1 (Alt OS)
+        group_display_desc       = Демэкзамен ССА 09.02.06-2026. Модуль 1
+        pool_name                = DE_09.02.06-2026_stand_A-{0}
+        pool_desc                = Стенд участника демэкзамена "Сетевое и системное администрирование" A-{0}
+        pool_access_role         = Competitor_DE
+        access_user_name         = Student-A{0}
+        access_user_desc         = Учетная запись участника демэкзамена A-{0}
+        deployment_condition     = NET_ACL_SUPPORT = true
+'
+config_stand_1_var[vm_1]='
+        name            = ISP
+        config_template = Alt-JeOS
+        startup         = order=1,up=8,down=30
+        firewall_opt    = { enable=1, dhcp=1 }
+        network_6       = { bridge=inet, firewall=1 }
+        network_7       = 🖧: ISP-HQ
+        network_8       = 🖧: ISP-BR
+'
+config_stand_1_var[vm_2]='
+        name            = HQ-RTR
+        config_template = Alt-JeOS
+        startup         = order=2,up=8,down=20
+        network_6       = 🖧: ISP-HQ
+        network_7       = { bridge="🖧: HQ-Net", access_role=PVESDNUser, vlan_aware=1 }
+'
+config_stand_1_var[vm_3]='
+        name            = HQ-SRV
+        config_template = Alt-Server
+        startup         = order=3,up=8,down=30
+        network_6       = 🖧: HQ-Net
+		access_role     = Competitor_DE-SDN
+'
+config_stand_1_var[vm_4]='
+        name            = HQ-CLI
+        config_template = Alt-Workstation
+        startup         = order=4,up=8,down=30
+        network_6       = 🖧: HQ-Net
+		access_role     = Competitor_DE-SDN
+'
+config_stand_1_var[vm_5]='
+        name            = BR-RTR
+        config_template = Alt-JeOS
+        startup         = order=2,up=8,down=20
+        network_6       = 🖧: ISP-BR
+        network_7       = 🖧: BR-Net
+'
+config_stand_1_var[vm_6]='
+        name            = BR-SRV
+        config_template = Alt-Server
+        startup         = order=3,up=8,down=30
+        network_6       = 🖧: BR-Net
+'
+
+#///=========================== Конфигурация варианта установки ===========================\\\#
+
+config_stand_2_var[_stand_config]='
+        description          = РЧ "Сетевое и системное администрирование" 2026. Модуль Б
+        group_display_desc   = РЧ "Сетевое и системное администрирование" 2026. Модуль Б
+        pool_name            = RC-SSA-2026_stand-B{0}
+        pool_desc            = Стенд РЧ "Сетевое и системное администрирование" № Б-{0}
+        access_user_name     = Competitor-B{0}
+        access_user_desc     = Участник соревнования. Рабочее место № Б-{0}
+        deployment_condition = IS_ALT_OS = false || PVE >= 8.0
+'
+config_stand_2_var[vm_1]='
+        config_template = ISP
+        network_7       = 🖧: isp-cod
+        network_8       = 🖧: isp-a
+'
+config_stand_2_var[vm_2]='
+        name            = rtr-cod
+        config_template = EcoRouterOS
+        network_1       = 🖧: isp-cod
+        network_2       = 🖧: rtr-cod <=> fw-cod
+'
+config_stand_2_var[vm_3]='
+        name            = fw-cod
+        config_template = Ideco-NGFW
+        network_6       = 🖧: rtr-cod <=> fw-cod
+        network_7       = 🖧: fw-cod <=> sw1-cod
+'
+config_stand_2_var[vm_4]='
+        name            = sw1-cod
+        config_template = Alt-Switch
+        network_6       = 🖧: fw-cod <=> sw1-cod
+        network_7       = 🖧: sw1-cod <=> sw2-cod #1
+        network_8       = 🖧: sw1-cod <=> sw2-cod #2
+        network_9       = 🖧: srv2-cod #1
+        network_10      = 🖧: srv2-cod #2
+        network_11      = 🖧: admin-cod
+'
+config_stand_2_var[vm_5]='
+        name            = sw2-cod
+        config_template = Alt-Switch
+        network_6       = 🖧: sw1-cod <=> sw2-cod #1
+        network_7       = 🖧: sw1-cod <=> sw2-cod #2
+        network_8       = 🖧: cli-cod
+        network_9       = 🖧: sip-cod
+        network_10      = 🖧: srv1-cod #1
+        network_11      = 🖧: srv1-cod #2
+'
+config_stand_2_var[vm_6]='
+        name            = cli-cod
+        config_template = Alt-Workstation
+        network_6       = 🖧: cli-cod
+'
+config_stand_2_var[vm_7]='
+        name            = sip-cod
+        config_template = SNG7-PBX16
+        network_6       = 🖧: sip-cod
+'
+config_stand_2_var[vm_8]='
+        name            = srv1-cod
+        config_template = Alt-Server
+        network_6       = 🖧: srv1-cod #1
+        network_7       = 🖧: srv1-cod #2
+'
+config_stand_2_var[vm_9]='
+        name            = srv2-cod
+        config_template = Alt-Server
+        network_6       = 🖧: srv2-cod #1
+        network_7       = 🖧: srv2-cod #2
+        disk_1          = 1 GB
+'
+config_stand_2_var[vm_10]='
+        name            = admin-cod
+        config_template = Alt-Workstation
+        network_6       = 🖧: admin-cod
+'
+config_stand_2_var[vm_11]='
+        name            = rtr-a
+        config_template = EcoRouterOS
+        network_1       = 🖧: isp-a
+        network_2       = 🖧: rtr-a <=> sw1-a
+'
+config_stand_2_var[vm_12]='
+        name            = sw1-a
+        config_template = Alt-Switch
+        network_6       = 🖧: rtr-a <=> sw1-a
+        network_7       = { bridge="🖧: sw1-a <=> sw2-a #1", type=OVSBridge, ovs_options="other_config:forward-bpdu=true" }
+        network_8       = { bridge="🖧: sw1-a <=> sw2-a #2", type=OVSBridge, ovs_options="other_config:forward-bpdu=true" }
+        network_9       = 🖧: dc-a
+'
+config_stand_2_var[vm_13]='
+        name            = sw2-a
+        config_template = Alt-Switch
+        network_6       = 🖧: sw1-a <=> sw2-a #1
+        network_7       = 🖧: sw1-a <=> sw2-a #2
+        network_8       = 🖧: cli1-a
+        network_9       = 🖧: cli2-a
+'
+config_stand_2_var[vm_14]='
+        name            = cli2-a
+        config_template = Alt-Workstation
+        network_6       = 🖧: cli2-a
+'
+config_stand_2_var[vm_15]='
+        name            = dc-a
+        config_template = Alt-Server
+        network_6       = 🖧: dc-a
+'
+config_stand_2_var[vm_16]='
+        name            = cli1-a
+        config_template = Alt-Workstation
+        network_6       = 🖧: cli1-a
+'
+
+#<------------------------------ Конец параметров конфигурации ------------------------------->#
