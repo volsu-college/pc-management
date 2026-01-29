@@ -585,6 +585,16 @@ function get_file() {
         if [[ "$filename" == '' ]]; then
             filename="$(mktemp 'ASDaC_noname_downloaded_file.XXXXXXXXXX' -p "${config_base[mk_tmpfs_imgdir]}")"
         else
+            # Check for local file in script directory (for short Yandex URLs where filename wasn't in URL)
+            local script_dir="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+            local local_filename="$(basename "$filename")"
+            if [[ -n "$local_filename" && -r "$script_dir/$local_filename" ]]; then
+                echo_tty "[${c_info}Info${c_null}] Использование локального файла ${c_value}$local_filename${c_null} вместо скачивания"
+                url="$script_dir/$local_filename"
+                filename="$url"
+                list_url_files["$md5"]="$url"
+                return 0
+            fi
             filename="${config_base[mk_tmpfs_imgdir]}/$filename"
         fi
         if [[ $filesize -gt $max_filesize ]]; then
