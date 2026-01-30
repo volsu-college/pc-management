@@ -1272,23 +1272,24 @@ localIP = "127.0.0.1"
 localPort = 22
 EOF
 
-    # Установка прав доступа: только root и red8 могут читать (содержит токен)
-    sudo chown root:root "$FRP_CONFIG_FILE"
-    sudo chmod 600 "$FRP_CONFIG_FILE"
-
-    # Добавление red8 в ACL для чтения файла
-    if command -v setfacl &> /dev/null; then
-        sudo setfacl -m u:red8:r "$FRP_CONFIG_FILE"
-        log_info "Права доступа к конфигурации: root (rw), red8 (r)"
-    else
-        # Если setfacl недоступен, создаем группу для доступа
-        if ! getent group frp &> /dev/null; then
-            sudo groupadd frp
+    # Проверяем, существует ли пользователь red8
+    if getent passwd red8 > /dev/null; then
+        # Добавление red8 в ACL для чтения файла
+        if command -v setfacl &> /dev/null; then
+            sudo setfacl -m u:red8:r "$FRP_CONFIG_FILE"
+            log_info "Права доступа к конфигурации: root (rw), red8 (r)"
+        else
+            # Если setfacl недоступен, создаем группу для доступа
+            if ! getent group frp &> /dev/null; then
+                sudo groupadd frp
+            fi
+            sudo usermod -aG frp red8
+            sudo chown root:frp "$FRP_CONFIG_FILE"
+            sudo chmod 640 "$FRP_CONFIG_FILE"
+            log_info "Права доступа к конфигурации: root (rw), группа frp (r)"
         fi
-        sudo usermod -aG frp red8 2>/dev/null || true
-        sudo chown root:frp "$FRP_CONFIG_FILE"
-        sudo chmod 640 "$FRP_CONFIG_FILE"
-        log_info "Права доступа к конфигурации: root (rw), группа frp (r)"
+    else
+        log_info "Пользователь red8 не существует — ограничения доступа не применены"
     fi
 
     log_success "Конфигурация FRP создана"
