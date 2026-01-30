@@ -848,6 +848,16 @@ function configure_imgdir() {
     [[ "$1" == add-size ]] && {
         local add_bytes="${2:-0}"
         isdigit_check "$add_bytes" || return 1
+
+        # Ensure tmpfs is mounted first
+        if [[ $(findmnt -T "${config_base[mk_tmpfs_imgdir]}" -o FSTYPE -t tmpfs | wc -l) != 2 ]]; then
+            mkdir -p "${config_base[mk_tmpfs_imgdir]}"
+            mountpoint -q "${config_base[mk_tmpfs_imgdir]}" || mount -t tmpfs tmpfs "${config_base[mk_tmpfs_imgdir]}" -o size=1M || {
+                echo_err 'Ошибка при создании временного хранилища tmpfs'
+                return 1
+            }
+        fi
+
         # Get current tmpfs size and usage
         local current_size=$(df -B1 "${config_base[mk_tmpfs_imgdir]}" 2>/dev/null | awk 'NR==2 {print $2}')
         local current_used=$(df -B1 "${config_base[mk_tmpfs_imgdir]}" 2>/dev/null | awk 'NR==2 {print $3}')
