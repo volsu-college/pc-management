@@ -1280,6 +1280,20 @@ function deploy_stand_config() {
             if [[ -n "$overlay_img" ]]; then
                 local overlay_file="$overlay_img"
                 get_file overlay_file || exit 1
+
+                # If overlay_file is a local file (not in tmpfs), copy it to tmpfs first
+                # to avoid modifying/deleting the original local file
+                if [[ "$overlay_file" != "${config_base[mk_tmpfs_imgdir]}"/* ]]; then
+                    local overlay_basename="$(basename "$overlay_file")"
+                    local overlay_copy="${config_base[mk_tmpfs_imgdir]}/$overlay_basename"
+                    echo_tty "[${c_info}Info${c_null}] Копирование локального overlay файла в tmpfs"
+                    cp "$overlay_file" "$overlay_copy" || {
+                        echo_err "Ошибка: не удалось скопировать overlay файл. Выход"
+                        exit 1
+                    }
+                    overlay_file="$overlay_copy"
+                fi
+
                 echo_tty "[${c_info}Info${c_null}] Применение overlay образа к базовому диску"
                 # Rebase overlay to use the downloaded base image as backing file
                 qemu-img rebase -u -b "$file" -F qcow2 "$overlay_file" || {
