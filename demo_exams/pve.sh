@@ -27,6 +27,9 @@ declare -A config_base=(
     [_mk_tmpfs_imgdir]='Временный раздел tmpfs в ОЗУ для хранения образов ВМ (уничтожается в конце установки)'
     [mk_tmpfs_imgdir]='/root/ASDaC_TMPFS_IMGDIR'
 
+    [_tmpfs_size_gb]='Размер tmpfs раздела в ГБ (0 = не использовать tmpfs)'
+    [tmpfs_size_gb]=''
+
     [_storage]='Хранилище для развертывания дисков ВМ'
     [storage]='{auto}'
 
@@ -373,6 +376,7 @@ function show_help() {
         -snap, --take-snapshots [boolean]$t${config_base[_take_snapshots]}
         -inst-start-vms, --run-vm-after-installation [boolean]$t${config_base[_run_vm_after_installation]}
         -dir, --mk-tmpfs-dir [boolean]$t${config_base[_mk_tmpfs_imgdir]}
+        -ts, --tmpfs-size [integer]$t${config_base[_tmpfs_size_gb]}
         -norm, --no-clear-tmpfs$t$_opt_rm_tmpfs
         -clr, --clear-tmpfs$tОчистить tmpfs директорию и выйти
         -pn, --pool-name [string]$t${config_base[_pool_name]}
@@ -609,7 +613,6 @@ function get_file() {
         fi
         [[ -r "$filename" ]] && [[ "$filesize" == '0' || "$( wc -c "$filename" | awk '{printf $1;exit}' )" == "$filesize" ]] \
         && [[ "$filesize" -gt 655360 && "${#file_sha256}" != 64 || "$( sha256sum "$filename" | awk '{printf $1}' )" == "$file_sha256" ]] || {
-            configure_imgdir add-size $max_filesize
             echo_tty "[${c_info}Info${c_null}] Скачивание файла ${c_value}$filename${c_null} Размер: ${c_value}$( echo "$filesize" | awk 'BEGIN{split("Б|КБ|МБ|ГБ|ТБ",x,"|")}{for(i=1;$1>=1024&&i<length(x);i++)$1/=1024;printf("%3.1f %s", $1, x[i]) }' )${c_null} URL: ${c_value}$base_url${c_null}"
             [[ "$base_url" != "$url" ]] && echo_verbose "Download URL: ${c_value}$url${c_null}"
             echo_verbose "SIZE: ${c_value}$filesize${c_null} SHA-256: ${c_value}$file_sha256${c_null}"
@@ -846,41 +849,41 @@ function configure_imgdir() {
         return 0
     }
 
-    [[ "$1" == add-size ]] && {
-        local add_bytes="${2:-0}"
-        isdigit_check "$add_bytes" || return 1
+    # Ask for tmpfs size if not specified
+    if [[ -z "${config_base[tmpfs_size_gb]}" ]]; then
+        local mem_total_gb=$(awk '/MemTotal/ {printf "%.0f", $2/1024/1024}' /proc/meminfo)
+        local mem_avail_gb=$(awk '/MemAvailable/ {printf "%.0f", $2/1024/1024}' /proc/meminfo)
+        echo_tty "[${c_info}Info${c_null}] Доступно ОЗУ: ${c_value}${mem_avail_gb}${c_null} ГБ из ${c_value}${mem_total_gb}${c_null} ГБ"
+        echo_tty "Введите размер tmpfs раздела в ГБ (рекомендуется 2-4 ГБ, 0 = не использовать tmpfs):"
+        read -r -p "> " config_base[tmpfs_size_gb]
+        [[ -z "${config_base[tmpfs_size_gb]}" ]] && config_base[tmpfs_size_gb]=2
+    fi
 
-        # Ensure tmpfs is mounted first
-        if [[ $(findmnt -T "${config_base[mk_tmpfs_imgdir]}" -o FSTYPE -t tmpfs | wc -l) != 2 ]]; then
-            mkdir -p "${config_base[mk_tmpfs_imgdir]}"
-            mountpoint -q "${config_base[mk_tmpfs_imgdir]}" || mount -t tmpfs tmpfs "${config_base[mk_tmpfs_imgdir]}" -o size=1M || {
-                echo_err 'Ошибка при создании временного хранилища tmpfs'
-                return 1
-            }
-        fi
-
-        # Get current tmpfs size and usage
-        local current_size=$(df -B1 "${config_base[mk_tmpfs_imgdir]}" 2>/dev/null | awk 'NR==2 {print $2}')
-        local current_used=$(df -B1 "${config_base[mk_tmpfs_imgdir]}" 2>/dev/null | awk 'NR==2 {print $3}')
-        [[ -z "$current_size" ]] && current_size=0
-        [[ -z "$current_used" ]] && current_used=0
-        # Calculate new size: current used + requested + 10% buffer
-        local new_size=$(( current_used + add_bytes + add_bytes / 10 ))
-        # Only resize if new size is larger than current
-        if [[ "$new_size" -gt "$current_size" ]]; then
-            mount -o remount,size="$new_size" "${config_base[mk_tmpfs_imgdir]}" || {
-                echo_err "Ошибка: не удалось увеличить размер tmpfs до $((new_size/1024/1024)) МБ"
-                return 1
-            }
-            echo_verbose "Размер tmpfs увеличен до $((new_size/1024/1024)) МБ"
-        fi
+    # If size is 0, don't use tmpfs - use regular directory
+    if [[ "${config_base[tmpfs_size_gb]}" == "0" ]]; then
+        mkdir -p "${config_base[mk_tmpfs_imgdir]}"
         return 0
-    }
+    fi
 
-    [[ $(findmnt -T "${config_base[mk_tmpfs_imgdir]}" -o FSTYPE -t tmpfs | wc -l) != 1 ]] \
-        && mkdir -p "${config_base[mk_tmpfs_imgdir]}" && \
-            { mountpoint -q "${config_base[mk_tmpfs_imgdir]}" || mount -t tmpfs tmpfs "${config_base[mk_tmpfs_imgdir]}" -o size=1M; } \
-            || { echo_err 'Ошибка при создании временного хранилища tmpfs'; exit 1; }
+    local size_bytes=$(( ${config_base[tmpfs_size_gb]} * 1024 * 1024 * 1024 ))
+
+    if mountpoint -q "${config_base[mk_tmpfs_imgdir]}" 2>/dev/null; then
+        # Already mounted, resize if needed
+        local current_size=$(df -B1 "${config_base[mk_tmpfs_imgdir]}" 2>/dev/null | awk 'NR==2 {print $2}')
+        if [[ "$size_bytes" -gt "$current_size" ]]; then
+            mount -o remount,size="$size_bytes" "${config_base[mk_tmpfs_imgdir]}" || {
+                echo_err "Ошибка: не удалось изменить размер tmpfs"
+                exit 1
+            }
+        fi
+    else
+        mkdir -p "${config_base[mk_tmpfs_imgdir]}"
+        mount -t tmpfs tmpfs "${config_base[mk_tmpfs_imgdir]}" -o size="$size_bytes" || {
+            echo_err 'Ошибка при создании временного хранилища tmpfs'
+            exit 1
+        }
+    fi
+    echo_tty "[${c_info}Info${c_null}] Tmpfs раздел: ${c_value}${config_base[tmpfs_size_gb]}${c_null} ГБ"
 }
 
 function check_name() {
@@ -1318,8 +1321,6 @@ function deploy_stand_config() {
                 if [[ "$overlay_file" != "${config_base[mk_tmpfs_imgdir]}"/* ]]; then
                     local overlay_basename="$(basename "$overlay_file")"
                     local overlay_copy="${config_base[mk_tmpfs_imgdir]}/$overlay_basename"
-                    local overlay_size=$(stat -c%s "$overlay_file" 2>/dev/null || echo 0)
-                    configure_imgdir add-size "$overlay_size"
                     echo_tty "[${c_info}Info${c_null}] Копирование локального overlay файла в tmpfs"
                     cp "$overlay_file" "$overlay_copy" || {
                         echo_err "Ошибка: не удалось скопировать overlay файл. Выход"
@@ -1337,10 +1338,6 @@ function deploy_stand_config() {
                 # Flatten the overlay image to remove backing file reference
                 # Proxmox refuses to import images with backing files ("untrusted image")
                 local merged_file="${overlay_file%.qcow2}.merged.qcow2"
-                # Resize tmpfs for merged file (base + overlay size to be safe)
-                local base_size=$(stat -c%s "$file" 2>/dev/null || echo 0)
-                local current_overlay_size=$(stat -c%s "$overlay_file" 2>/dev/null || echo 0)
-                configure_imgdir add-size "$((base_size + current_overlay_size))"
                 echo_tty "[${c_info}Info${c_null}] Объединение overlay с базовым образом"
                 qemu-img convert -O qcow2 "$overlay_file" "$merged_file" || {
                     echo_err "Ошибка: не удалось объединить overlay с базовым образом. Выход"
@@ -2102,6 +2099,7 @@ while [ $# != 0 ]; do
                 -vmbr|--wan-bridge)     check_arg "$2"; config_base[inet_bridge]="$2"; shift;;
                 -vmid|--start-vm-id)    check_arg "$2"; config_base[start_vmid]="$2"; shift;;
                 -dir|--mk-tmpfs-dir)    check_arg "$2"; config_base[mk_tmpfs_imgdir]="$2"; shift;;
+                -ts|--tmpfs-size)       check_arg "$2"; config_base[tmpfs_size_gb]="$2"; shift;;
                 -norm|--no-clear-tmpfs) opt_rm_tmpfs=false;;
                 -clr|--clear-tmpfs)
                     if mountpoint -q "${config_base[mk_tmpfs_imgdir]}" 2>/dev/null; then
