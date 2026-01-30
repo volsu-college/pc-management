@@ -1286,7 +1286,16 @@ function deploy_stand_config() {
                     echo_err "Ошибка: не удалось применить overlay образ. Выход"
                     exit 1
                 }
-                file="$overlay_file"
+                # Flatten the overlay image to remove backing file reference
+                # Proxmox refuses to import images with backing files ("untrusted image")
+                local merged_file="${overlay_file%.qcow2}.merged.qcow2"
+                echo_tty "[${c_info}Info${c_null}] Объединение overlay с базовым образом"
+                qemu-img convert -O qcow2 "$overlay_file" "$merged_file" || {
+                    echo_err "Ошибка: не удалось объединить overlay с базовым образом. Выход"
+                    exit 1
+                }
+                rm -f "$overlay_file"
+                file="$merged_file"
             fi
 
             cmd_line+=" --${disk_type}${disk_num} '${config_base[storage]}:0,format=$config_disk_format,import-from=$file$disk_opts'"
