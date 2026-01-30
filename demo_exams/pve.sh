@@ -374,6 +374,7 @@ function show_help() {
         -inst-start-vms, --run-vm-after-installation [boolean]$t${config_base[_run_vm_after_installation]}
         -dir, --mk-tmpfs-dir [boolean]$t${config_base[_mk_tmpfs_imgdir]}
         -norm, --no-clear-tmpfs$t$_opt_rm_tmpfs
+        -clr, --clear-tmpfs$tОчистить tmpfs директорию и выйти
         -pn, --pool-name [string]$t${config_base[_pool_name]}
         -acl, --access-create [boolean]$t${config_base[_access_create]}
         -u, --user-name [string]$t${config_base[_access_user_name]}
@@ -1336,6 +1337,9 @@ function deploy_stand_config() {
                 # Flatten the overlay image to remove backing file reference
                 # Proxmox refuses to import images with backing files ("untrusted image")
                 local merged_file="${overlay_file%.qcow2}.merged.qcow2"
+                # Resize tmpfs for merged file (approximately base image size)
+                local base_size=$(stat -c%s "$file" 2>/dev/null || echo 0)
+                configure_imgdir add-size "$base_size"
                 echo_tty "[${c_info}Info${c_null}] Объединение overlay с базовым образом"
                 qemu-img convert -O qcow2 "$overlay_file" "$merged_file" || {
                     echo_err "Ошибка: не удалось объединить overlay с базовым образом. Выход"
@@ -2098,6 +2102,15 @@ while [ $# != 0 ]; do
                 -vmid|--start-vm-id)    check_arg "$2"; config_base[start_vmid]="$2"; shift;;
                 -dir|--mk-tmpfs-dir)    check_arg "$2"; config_base[mk_tmpfs_imgdir]="$2"; shift;;
                 -norm|--no-clear-tmpfs) opt_rm_tmpfs=false;;
+                -clr|--clear-tmpfs)
+                    if mountpoint -q "${config_base[mk_tmpfs_imgdir]}" 2>/dev/null; then
+                        umount "${config_base[mk_tmpfs_imgdir]}" && rmdir "${config_base[mk_tmpfs_imgdir]}" 2>/dev/null
+                        echo "Tmpfs директория очищена"
+                    else
+                        rm -rf "${config_base[mk_tmpfs_imgdir]}" 2>/dev/null
+                        echo "Директория удалена"
+                    fi
+                    exit 0;;
                 -st|--storage)          check_arg "$2"; config_base[storage]="$2"; shift;;
                 -pn|--pool-name)        check_arg "$2"; config_base[pool_name]="$2"; shift;;
                 -snap|--take-snapshots) check_arg "$2"; config_base[take_snapshots]="$2"; shift;;
