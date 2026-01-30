@@ -1337,9 +1337,10 @@ function deploy_stand_config() {
                 # Flatten the overlay image to remove backing file reference
                 # Proxmox refuses to import images with backing files ("untrusted image")
                 local merged_file="${overlay_file%.qcow2}.merged.qcow2"
-                # Resize tmpfs for merged file (approximately base image size)
+                # Resize tmpfs for merged file (base + overlay size to be safe)
                 local base_size=$(stat -c%s "$file" 2>/dev/null || echo 0)
-                configure_imgdir add-size "$base_size"
+                local current_overlay_size=$(stat -c%s "$overlay_file" 2>/dev/null || echo 0)
+                configure_imgdir add-size "$((base_size + current_overlay_size))"
                 echo_tty "[${c_info}Info${c_null}] Объединение overlay с базовым образом"
                 qemu-img convert -O qcow2 "$overlay_file" "$merged_file" || {
                     echo_err "Ошибка: не удалось объединить overlay с базовым образом. Выход"
