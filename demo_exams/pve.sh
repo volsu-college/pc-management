@@ -1307,6 +1307,8 @@ function deploy_stand_config() {
                 if [[ "$overlay_file" != "${config_base[mk_tmpfs_imgdir]}"/* ]]; then
                     local overlay_basename="$(basename "$overlay_file")"
                     local overlay_copy="${config_base[mk_tmpfs_imgdir]}/$overlay_basename"
+                    local overlay_size=$(stat -c%s "$overlay_file" 2>/dev/null || echo 0)
+                    configure_imgdir add-size "$overlay_size"
                     echo_tty "[${c_info}Info${c_null}] Копирование локального overlay файла в tmpfs"
                     cp "$overlay_file" "$overlay_copy" || {
                         echo_err "Ошибка: не удалось скопировать overlay файл. Выход"
