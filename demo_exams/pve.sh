@@ -845,6 +845,27 @@ function configure_imgdir() {
         return 0
     }
 
+    [[ "$1" == add-size ]] && {
+        local add_bytes="${2:-0}"
+        isdigit_check "$add_bytes" || return 1
+        # Get current tmpfs size and usage
+        local current_size=$(df -B1 "${config_base[mk_tmpfs_imgdir]}" 2>/dev/null | awk 'NR==2 {print $2}')
+        local current_used=$(df -B1 "${config_base[mk_tmpfs_imgdir]}" 2>/dev/null | awk 'NR==2 {print $3}')
+        [[ -z "$current_size" ]] && current_size=0
+        [[ -z "$current_used" ]] && current_used=0
+        # Calculate new size: current used + requested + 10% buffer
+        local new_size=$(( current_used + add_bytes + add_bytes / 10 ))
+        # Only resize if new size is larger than current
+        if [[ "$new_size" -gt "$current_size" ]]; then
+            mount -o remount,size="$new_size" "${config_base[mk_tmpfs_imgdir]}" || {
+                echo_err "Ошибка: не удалось увеличить размер tmpfs до $((new_size/1024/1024)) МБ"
+                return 1
+            }
+            echo_verbose "Размер tmpfs увеличен до $((new_size/1024/1024)) МБ"
+        fi
+        return 0
+    }
+
     [[ $(findmnt -T "${config_base[mk_tmpfs_imgdir]}" -o FSTYPE -t tmpfs | wc -l) != 1 ]] \
         && mkdir -p "${config_base[mk_tmpfs_imgdir]}" && \
             { mountpoint -q "${config_base[mk_tmpfs_imgdir]}" || mount -t tmpfs tmpfs "${config_base[mk_tmpfs_imgdir]}" -o size=1M; } \
