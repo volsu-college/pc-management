@@ -1141,6 +1141,7 @@ install_librecad() {
 INVENTORY_FILE="/etc/volsu/inventory_id"
 FRP_INSTALL_DIR="/opt/frp"
 FRP_CONFIG_FILE="/opt/frp/frpc.toml"
+FRP_VERSION="0.67.0"
 
 # Функция для получения инвентарного номера ПК
 get_inventory_id() {
@@ -1198,18 +1199,18 @@ install_frp() {
             sudo chmod +x "$FRP_INSTALL_DIR/frpc"
             log_success "FRP клиент установлен из локального файла"
         else
-            log_info "Скачивание FRP v0.66.0..."
+            log_info "Скачивание FRP v${FRP_VERSION}..."
             local temp_dir
             temp_dir=$(mktemp -d)
 
-            if ! curl -sL -o "$temp_dir/frp.tar.gz" "https://github.com/fatedier/frp/releases/download/v0.66.0/frp_0.66.0_linux_amd64.tar.gz"; then
+            if ! curl -sL -o "$temp_dir/frp.tar.gz" "https://github.com/fatedier/frp/releases/download/v${FRP_VERSION}/frp_${FRP_VERSION}_linux_amd64.tar.gz"; then
                 log_error "Ошибка при скачивании FRP"
                 rm -rf "$temp_dir"
                 return 1
             fi
 
             tar -xzf "$temp_dir/frp.tar.gz" -C "$temp_dir"
-            sudo mv "$temp_dir/frp_0.66.0_linux_amd64/frpc" "$FRP_INSTALL_DIR/"
+            sudo mv "$temp_dir/frp_${FRP_VERSION}_linux_amd64/frpc" "$FRP_INSTALL_DIR/"
             sudo chmod +x "$FRP_INSTALL_DIR/frpc"
             rm -rf "$temp_dir"
 
