@@ -2,11 +2,42 @@
 set -euo pipefail
 
 # Скрипт настройки киоска для Debian 13 с XFCE
-# Использование: ./kiosk.sh user@host [kiosk_url]
+# Использование: ./kiosk.sh [--proxy proxy_server[:port]] user@host [kiosk_url]
+
+PROXY_SERVER=""
+PROXY_PORT="5000"
+
+# Парсинг аргументов
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --proxy)
+            if [[ -n "$2" && ! "$2" =~ ^-- ]]; then
+                if [[ "$2" == *:* ]]; then
+                    PROXY_SERVER="${2%:*}"
+                    PROXY_PORT="${2##*:}"
+                else
+                    PROXY_SERVER="$2"
+                fi
+                shift 2
+            else
+                echo "Ошибка: --proxy требует аргумент"
+                exit 1
+            fi
+            ;;
+        -*)
+            echo "Неизвестный параметр: $1"
+            exit 1
+            ;;
+        *)
+            break
+            ;;
+    esac
+done
 
 if [[ $# -lt 1 ]]; then
-    echo "Использование: $0 user@host [kiosk_url]"
+    echo "Использование: $0 [--proxy proxy_server[:port]] user@host [kiosk_url]"
     echo "Пример: $0 nikita@192.168.0.199 https://example.com"
+    echo "Пример с прокси: $0 --proxy frp.spo.nn-projects.ru:5000 root@1013404958.volsu.ru https://example.com"
     exit 1
 fi
 
@@ -17,7 +48,17 @@ KIOSK_USER="kiosk"
 echo "Настройка киоска на $TARGET_HOST"
 echo "URL киоска: $KIOSK_URL"
 
-ssh -t "$TARGET_HOST" bash -s "$KIOSK_USER" "$KIOSK_URL" << 'REMOTE_SCRIPT'
+# Выполнение SSH с или без прокси
+run_ssh() {
+    if [[ -n "$PROXY_SERVER" ]]; then
+        echo "Прокси: $PROXY_SERVER:$PROXY_PORT"
+        ssh -t -o "proxycommand=socat - PROXY:$PROXY_SERVER:%h:%p,proxyport=$PROXY_PORT" "$TARGET_HOST" bash -s "$KIOSK_USER" "$KIOSK_URL"
+    else
+        ssh -t "$TARGET_HOST" bash -s "$KIOSK_USER" "$KIOSK_URL"
+    fi
+}
+
+run_ssh << 'REMOTE_SCRIPT'
 set -euo pipefail
 
 KIOSK_USER="$1"
