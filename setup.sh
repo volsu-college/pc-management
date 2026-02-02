@@ -1171,7 +1171,7 @@ install_frp() {
 
     if [[ -z "$inventory_id" ]]; then
         log_warning "Инвентарный номер ПК не установлен"
-        echo -n "Введите инвентарный номер ПК (например, PC-001): "
+        echo -n "Введите инвентарный номер ПК (например, 10418521): "
         read -r inventory_id
 
         if [[ -z "$inventory_id" ]]; then
@@ -1343,7 +1343,7 @@ change_frp_inventory_id() {
         log_info "Текущий инвентарный номер: $current_id"
     fi
 
-    echo -n "Введите новый инвентарный номер ПК: "
+    echo -n "Введите новый инвентарный номер ПК (например, 10418521): "
     read -r new_id
 
     if [[ -z "$new_id" ]]; then
