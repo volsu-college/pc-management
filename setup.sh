@@ -1315,6 +1315,13 @@ LimitNOFILE=1048576
 WantedBy=multi-user.target
 EOF
 
+    # Исправление SELinux контекста для frpc (иначе systemd не сможет запустить бинарник)
+    if command -v restorecon &> /dev/null; then
+        sudo restorecon -v "$FRP_INSTALL_DIR/frpc"
+    elif command -v chcon &> /dev/null; then
+        sudo chcon -t bin_t "$FRP_INSTALL_DIR/frpc"
+    fi
+
     # Включение и запуск сервиса
     sudo systemctl daemon-reload
     sudo systemctl enable frpc
