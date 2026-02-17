@@ -961,9 +961,8 @@ STUDENT_PASSWORD="${STUDENT_PASSWORD:-}"
 RED8_PASSWORD="${RED8_PASSWORD:-}"
 ROOT_PASSWORD="${ROOT_PASSWORD:-}"
 
-# Load FRP authentication token from environment variables
-# This should be set via .env file or GitHub Actions secrets
-FRP_AUTH_TOKEN="${FRP_AUTH_TOKEN:-}"
+# Kurisu server address from environment variables
+KURISU_SERVER="${KURISU_SERVER:-}"
 
 # Функция для установки Veyon
 install_veyon() {
@@ -1139,9 +1138,8 @@ install_librecad() {
 
 # Файл для хранения инвентарного номера ПК (общий для всех сервисов)
 INVENTORY_FILE="/etc/volsu/inventory_id"
-FRP_INSTALL_DIR="/opt/frp"
-FRP_CONFIG_FILE="/opt/frp/frpc.toml"
-FRP_VERSION="0.67.0"
+KURISU_INSTALL_DIR="/opt/kurisu"
+KURISU_CONFIG_FILE="/opt/kurisu/client.yaml"
 
 # Функция для получения инвентарного номера ПК
 get_inventory_id() {
@@ -1161,9 +1159,9 @@ set_inventory_id() {
     log_success "Инвентарный номер сохранен: $inventory_id"
 }
 
-# Функция для установки FRP клиента
-install_frp() {
-    log_info "Установка FRP клиента..."
+# Функция для установки Kurisu клиента
+install_kurisu() {
+    log_info "Установка Kurisu клиента..."
 
     # Проверка/запрос инвентарного номера
     local inventory_id
@@ -1184,163 +1182,95 @@ install_frp() {
         log_info "Используется инвентарный номер: $inventory_id"
     fi
 
-    # Создание директории для FRP
-    sudo mkdir -p "$FRP_INSTALL_DIR"
+    # Копирование бинарника из директории скрипта
+    local script_dir
+    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-    # Скачивание FRP если не установлен
-    if [[ ! -f "$FRP_INSTALL_DIR/frpc" ]]; then
-        local script_dir
-        script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-
-        # Проверка наличия локального бинарника frpc в директории скрипта
-        if [[ -f "$script_dir/frpc" ]]; then
-            log_info "Использование локального бинарника frpc..."
-            sudo cp "$script_dir/frpc" "$FRP_INSTALL_DIR/"
-            sudo chmod +x "$FRP_INSTALL_DIR/frpc"
-            log_success "FRP клиент установлен из локального файла"
-        else
-            log_info "Скачивание FRP v${FRP_VERSION}..."
-            local temp_dir
-            temp_dir=$(mktemp -d)
-
-            if ! curl -sL -o "$temp_dir/frp.tar.gz" "https://github.com/fatedier/frp/releases/download/v${FRP_VERSION}/frp_${FRP_VERSION}_linux_amd64.tar.gz"; then
-                log_error "Ошибка при скачивании FRP"
-                rm -rf "$temp_dir"
-                return 1
-            fi
-
-            tar -xzf "$temp_dir/frp.tar.gz" -C "$temp_dir"
-            sudo mv "$temp_dir/frp_${FRP_VERSION}_linux_amd64/frpc" "$FRP_INSTALL_DIR/"
-            sudo chmod +x "$FRP_INSTALL_DIR/frpc"
-            rm -rf "$temp_dir"
-
-            log_success "FRP клиент установлен"
-        fi
-    else
-        log_info "FRP клиент уже установлен"
+    if [[ ! -f "$script_dir/kurisu" ]]; then
+        log_error "Бинарник kurisu не найден в $script_dir"
+        return 1
     fi
 
-    # Создание конфигурационного файла
-    log_info "Создание конфигурации FRP..."
+    sudo mkdir -p "$KURISU_INSTALL_DIR"
+    sudo cp "$script_dir/kurisu" "$KURISU_INSTALL_DIR/kurisu"
+    sudo chmod +x "$KURISU_INSTALL_DIR/kurisu"
+    log_success "Kurisu клиент установлен"
 
-    # Получение токена из переменной окружения или запрос
-    local frp_token="${FRP_AUTH_TOKEN:-}"
-    if [[ -z "$frp_token" ]]; then
-        log_warning "FRP_AUTH_TOKEN не установлен в переменных окружения"
-        echo -n "Введите токен аутентификации FRP: "
-        read -rs frp_token
-        echo ""
+    # Создание конфигурации
+    log_info "Создание конфигурации Kurisu..."
 
-        if [[ -z "$frp_token" ]]; then
-            log_error "Токен аутентификации не может быть пустым"
+    local kurisu_server="${KURISU_SERVER:-}"
+    if [[ -z "$kurisu_server" ]]; then
+        log_warning "KURISU_SERVER не установлен в переменных окружения"
+        echo -n "Введите адрес сервера Kurisu (host:port): "
+        read -r kurisu_server
+
+        if [[ -z "$kurisu_server" ]]; then
+            log_error "Адрес сервера не может быть пустым"
             return 1
         fi
     fi
 
-    # Получение адреса сервера из переменной окружения или использование по умолчанию
-    local frp_server="${FRP_SERVER_ADDR:-frp.spo.nn-projects.ru}"
-    local frp_port="${FRP_SERVER_PORT:-443}"
+    local http_proxy="${HTTP_PROXY:-}"
 
-    # Получение прокси из переменных окружения
-    local proxy_url="${HTTP_PROXY:-}"
+    sudo tee "$KURISU_CONFIG_FILE" > /dev/null << EOF
+server: "${kurisu_server}"
+secure: true
 
-    # Создание конфигурации
-    sudo tee "$FRP_CONFIG_FILE" > /dev/null << EOF
-# FRP Client Configuration
-# PC Inventory ID: $inventory_id
+http_proxy: "${http_proxy}"
 
-serverAddr = "$frp_server"
-serverPort = $frp_port
-
-# HTTP Proxy configuration
-transport.proxyURL = "$proxy_url"
-
-# Authentication token
-auth.token = "$frp_token"
-
-# Logging
-log.to = "/var/log/frpc.log"
-log.level = "info"
-log.maxDays = 3
-
-# SSH proxy configuration using tcpmux
-[[proxies]]
-name = "ssh-$inventory_id"
-type = "tcpmux"
-multiplexer = "httpconnect"
-customDomains = ["$inventory_id.volsu.ru"]
-localIP = "127.0.0.1"
-localPort = 22
+id: "${inventory_id}"
+publish:
+  - name: ssh
+    port: 22
+    addr: "127.0.0.1"
 EOF
 
-    # Проверяем, существует ли пользователь red8
-    if getent passwd red8 > /dev/null; then
-        # Добавление red8 в ACL для чтения файла
-        if command -v setfacl &> /dev/null; then
-            sudo setfacl -m u:red8:r "$FRP_CONFIG_FILE"
-            log_info "Права доступа к конфигурации: root (rw), red8 (r)"
-        else
-            # Если setfacl недоступен, создаем группу для доступа
-            if ! getent group frp &> /dev/null; then
-                sudo groupadd frp
-            fi
-            sudo usermod -aG frp red8
-            sudo chown root:frp "$FRP_CONFIG_FILE"
-            sudo chmod 640 "$FRP_CONFIG_FILE"
-            log_info "Права доступа к конфигурации: root (rw), группа frp (r)"
-        fi
-    else
-        log_info "Пользователь red8 не существует — ограничения доступа не применены"
-    fi
-
-    log_success "Конфигурация FRP создана"
+    log_success "Конфигурация Kurisu создана"
 
     # Создание systemd сервиса
-    log_info "Создание systemd сервиса для FRP..."
-    sudo tee /etc/systemd/system/frpc.service > /dev/null << EOF
+    log_info "Создание systemd сервиса для Kurisu..."
+    sudo tee /etc/systemd/system/kurisu-client.service > /dev/null << EOF
 [Unit]
-Description=FRP Client - Remote SSH Access
-Documentation=https://github.com/fatedier/frp
+Description=kurisu client
 After=network.target
 
 [Service]
 Type=simple
-WorkingDirectory=$FRP_INSTALL_DIR
-ExecStart=$FRP_INSTALL_DIR/frpc -c $FRP_CONFIG_FILE
-Restart=on-failure
+ExecStart=${KURISU_INSTALL_DIR}/kurisu client -c ${KURISU_CONFIG_FILE}
+WorkingDirectory=${KURISU_INSTALL_DIR}
+Restart=always
 RestartSec=5
-LimitNOFILE=1048576
 
 [Install]
 WantedBy=multi-user.target
 EOF
 
-    # Исправление SELinux контекста для frpc (иначе systemd не сможет запустить бинарник)
+    # Исправление SELinux контекста
     if command -v restorecon &> /dev/null; then
-        sudo restorecon -v "$FRP_INSTALL_DIR/frpc"
+        sudo restorecon -v "$KURISU_INSTALL_DIR/kurisu"
     elif command -v chcon &> /dev/null; then
-        sudo chcon -t bin_t "$FRP_INSTALL_DIR/frpc"
+        sudo chcon -t bin_t "$KURISU_INSTALL_DIR/kurisu"
     fi
 
     # Включение и запуск сервиса
     sudo systemctl daemon-reload
-    sudo systemctl enable frpc
-    sudo systemctl restart frpc
+    sudo systemctl enable kurisu-client
+    sudo systemctl restart kurisu-client
 
     # Проверка статуса
-    if sudo systemctl is-active --quiet frpc; then
-        log_success "FRP клиент успешно установлен и запущен"
-        log_info "Подключение через: ssh -o 'proxycommand socat - PROXY:$frp_server:%h:%p,proxyport=5000' user@$inventory_id.volsu.ru"
+    if sudo systemctl is-active --quiet kurisu-client; then
+        log_success "Kurisu клиент успешно установлен и запущен"
     else
-        log_error "FRP клиент не удалось запустить. Проверьте логи: sudo journalctl -u frpc"
+        log_error "Kurisu клиент не удалось запустить. Проверьте логи: sudo journalctl -u kurisu-client"
         return 1
     fi
 
     return 0
 }
 
-# Функция для изменения инвентарного номера FRP
-change_frp_inventory_id() {
+# Функция для изменения инвентарного номера Kurisu
+change_kurisu_inventory_id() {
     log_info "Изменение инвентарного номера ПК..."
 
     local current_id
@@ -1360,39 +1290,39 @@ change_frp_inventory_id() {
 
     set_inventory_id "$new_id"
 
-    # Переустановка FRP с новым ID
-    log_info "Переконфигурация FRP с новым инвентарным номером..."
-    install_frp
+    # Переустановка Kurisu с новым ID
+    log_info "Переконфигурация Kurisu с новым инвентарным номером..."
+    install_kurisu
 }
 
-# Меню управления FRP
-frp_management() {
+# Меню управления Kurisu
+kurisu_management() {
     while true; do
         echo ""
-        echo -e "${BLUE}=== Управление FRP ===${NC}"
-        echo "1. Установить/обновить FRP клиент"
+        echo -e "${BLUE}=== Управление Kurisu ===${NC}"
+        echo "1. Установить/обновить Kurisu клиент"
         echo "2. Изменить инвентарный номер ПК"
-        echo "3. Показать статус FRP"
-        echo "4. Перезапустить FRP"
+        echo "3. Показать статус Kurisu"
+        echo "4. Перезапустить Kurisu"
         echo "5. Вернуться в меню программного обеспечения"
         echo -n "Выберите опцию: "
         read -r choice
 
         case $choice in
             1)
-                install_frp
+                install_kurisu
                 ;;
             2)
-                change_frp_inventory_id
+                change_kurisu_inventory_id
                 ;;
             3)
                 echo ""
                 log_info "Инвентарный номер: $(get_inventory_id)"
-                sudo systemctl status frpc --no-pager -l || true
+                sudo systemctl status kurisu-client --no-pager -l || true
                 ;;
             4)
-                sudo systemctl restart frpc
-                log_success "FRP перезапущен"
+                sudo systemctl restart kurisu-client
+                log_success "Kurisu перезапущен"
                 ;;
             5)
                 break
@@ -1416,7 +1346,7 @@ install_all_software() {
     install_veyon
     configure_veyon_student_key
     install_librecad
-    install_frp
+    install_kurisu
 
     log_success "Установка ПО завершена"
 }
@@ -1460,7 +1390,7 @@ software_installation() {
         echo "5. Установить GCC (GNU Compiler Collection)"
         echo "6. Управление Veyon"
         echo "7. Установить LibreCAD"
-        echo "8. Управление FRP (удалённый доступ)"
+        echo "8. Управление Kurisu (удалённый доступ)"
         echo "9. Установить все программное обеспечение"
         echo "10. Вернуться в главное меню"
         echo -n "Выберите опцию: "
@@ -1489,7 +1419,7 @@ software_installation() {
                 install_librecad
                 ;;
             8)
-                frp_management
+                kurisu_management
                 ;;
             9)
                 install_all_software

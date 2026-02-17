@@ -6,12 +6,14 @@ set -euo pipefail
 
 PROXY_SERVER=""
 PROXY_PORT="5000"
+DEBUG_MODE=""
 
 # Парсинг аргументов
+POSITIONAL_ARGS=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --proxy)
-            if [[ -n "$2" && ! "$2" =~ ^-- ]]; then
+            if [[ -n "${2:-}" && ! "$2" =~ ^-- ]]; then
                 if [[ "$2" == *:* ]]; then
                     PROXY_SERVER="${2%:*}"
                     PROXY_PORT="${2##*:}"
@@ -24,20 +26,27 @@ while [[ $# -gt 0 ]]; do
                 exit 1
             fi
             ;;
+        --debug)
+            DEBUG_MODE="1"
+            shift
+            ;;
         -*)
             echo "Неизвестный параметр: $1"
             exit 1
             ;;
         *)
-            break
+            POSITIONAL_ARGS+=("$1")
+            shift
             ;;
     esac
 done
+set -- "${POSITIONAL_ARGS[@]}"
 
 if [[ $# -lt 1 ]]; then
-    echo "Использование: $0 [--proxy proxy_server[:port]] user@host [kiosk_url]"
+    echo "Использование: $0 [--proxy proxy_server[:port]] [--debug] user@host [kiosk_url]"
     echo "Пример: $0 nikita@192.168.0.199 https://example.com"
     echo "Пример с прокси: $0 --proxy frp.spo.nn-projects.ru:5000 root@1013404958.volsu.ru https://example.com"
+    echo "Пример с отладкой: $0 --debug nikita@192.168.0.199 https://example.com"
     exit 1
 fi
 
@@ -52,9 +61,9 @@ echo "URL киоска: $KIOSK_URL"
 run_ssh() {
     if [[ -n "$PROXY_SERVER" ]]; then
         echo "Прокси: $PROXY_SERVER:$PROXY_PORT"
-        ssh -t -o "proxycommand=socat - PROXY:$PROXY_SERVER:%h:%p,proxyport=$PROXY_PORT" "$TARGET_HOST" bash -s "$KIOSK_USER" "$KIOSK_URL"
+        ssh -t -o "proxycommand=socat - PROXY:$PROXY_SERVER:%h:%p,proxyport=$PROXY_PORT" "$TARGET_HOST" bash -s "$KIOSK_USER" "$KIOSK_URL" "$DEBUG_MODE"
     else
-        ssh -t "$TARGET_HOST" bash -s "$KIOSK_USER" "$KIOSK_URL"
+        ssh -t "$TARGET_HOST" bash -s "$KIOSK_USER" "$KIOSK_URL" "$DEBUG_MODE"
     fi
 }
 
@@ -63,6 +72,7 @@ set -euo pipefail
 
 KIOSK_USER="$1"
 KIOSK_URL="$2"
+DEBUG_MODE="${3:-}"
 
 echo "==> Установка необходимых пакетов..."
 sudo apt-get update
@@ -93,11 +103,17 @@ KIOSK_HOME="/home/$KIOSK_USER"
 sudo mkdir -p "$KIOSK_HOME/.config/autostart"
 
 # Автозапуск Chromium в режиме киоска
+if [[ -n "$DEBUG_MODE" ]]; then
+    CHROMIUM_FLAGS="--start-fullscreen"
+else
+    CHROMIUM_FLAGS="--kiosk"
+fi
+
 sudo tee "$KIOSK_HOME/.config/autostart/chromium-kiosk.desktop" > /dev/null << EOF
 [Desktop Entry]
 Type=Application
 Name=Chromium Kiosk
-Exec=/usr/bin/chromium --kiosk --noerrdialogs --disable-infobars --no-first-run --disable-session-crashed-bubble --disable-translate --start-fullscreen --password-store=basic --disable-features=PasswordManager,Translate,TranslateUI "$KIOSK_URL"
+Exec=/usr/bin/chromium $CHROMIUM_FLAGS --noerrdialogs --disable-infobars --no-first-run --disable-session-crashed-bubble --disable-translate --password-store=basic --disable-features=PasswordManager,Translate,TranslateUI "$KIOSK_URL"
 Hidden=false
 NoDisplay=false
 X-GNOME-Autostart-enabled=true

@@ -1,0 +1,149 @@
+---
+- name: Install k3s control plane
+  hosts: k3s_control_plane
+  become: yes
+  gather_facts: yes
+  serial: 1
+
+  tasks:
+    - name: Add local network to NO_PROXY in /etc/environment
+      ansible.builtin.replace:
+        path: /etc/environment
+        regexp: '^(NO_PROXY=).*$'
+        replace: '\1"localhost,127.0.0.1,::1,192.168.10.0/24,10.42.0.0/16,10.43.0.0/16"'
+      tags: proxy
+
+    - name: Add local network to no_proxy in /etc/environment
+      ansible.builtin.replace:
+        path: /etc/environment
+        regexp: '^(no_proxy=).*$'
+        replace: '\1"localhost,127.0.0.1,::1,192.168.10.0/24,10.42.0.0/16,10.43.0.0/16"'
+      tags: proxy
+
+    - name: Copy k3s install script
+      ansible.builtin.copy:
+        src: ../k3s.sh
+        dest: /tmp/k3s-install.sh
+        mode: "0755"
+
+    - name: Check k3s service status
+      ansible.builtin.systemd:
+        name: k3s
+      register: k3s_service_status
+      failed_when: false
+
+    - name: Install k3s primary master node
+      ansible.builtin.shell: /tmp/k3s-install.sh
+      environment:
+        K3S_KUBECONFIG_MODE: "0644"
+        INSTALL_K3S_EXEC: "server --cluster-init --node-name={{ inventory_hostname }}"
+        INSTALL_K3S_SKIP_START: "true"
+      register: k3s_install
+      when:
+        - inventory_hostname in groups['k3s_init']
+        - k3s_service_status.status.ActiveState is not defined or k3s_service_status.status.ActiveState not in ["active", "activating"]
+
+    - name: Configure proxy in k3s service env (primary)
+      ansible.builtin.lineinfile:
+        path: /etc/systemd/system/k3s.service.env
+        regexp: "{{ item.regexp }}"
+        line: "{{ item.line }}"
+      loop:
+        - { regexp: '^HTTP_PROXY=', line: 'HTTP_PROXY="http://127.0.0.1:3128"' }
+        - { regexp: '^HTTPS_PROXY=', line: 'HTTPS_PROXY="http://127.0.0.1:3128"' }
+        - { regexp: '^NO_PROXY=', line: 'NO_PROXY="localhost,127.0.0.1,::1,192.168.10.0/24,10.42.0.0/16,10.43.0.0/16,.svc,.cluster.local"' }
+      when:
+        - inventory_hostname in groups['k3s_init']
+        - k3s_install is changed
+
+    - name: Start k3s primary master node
+      ansible.builtin.systemd:
+        name: k3s
+        state: started
+        daemon_reload: yes
+      when:
+        - inventory_hostname in groups['k3s_init']
+        - k3s_install is changed
+
+    - name: Wait for node token to exist
+      ansible.builtin.stat:
+        path: /var/lib/rancher/k3s/server/node-token
+      register: token_stat
+      retries: 30
+      delay: 5
+      until: token_stat.stat.exists
+      when: inventory_hostname in groups['k3s_init']
+
+    - name: Wait for k3s service to be active on primary
+      ansible.builtin.systemd:
+        name: k3s
+      register: k3s_service_check
+      retries: 30
+      delay: 5
+      until: k3s_service_check.status.ActiveState == "active"
+      when: inventory_hostname in groups['k3s_init']
+
+    - name: Get k3s token from primary master
+      ansible.builtin.slurp:
+        src: /var/lib/rancher/k3s/server/node-token
+      register: k3s_token
+      when: inventory_hostname in groups['k3s_init']
+
+    - name: Set k3s token fact
+      ansible.builtin.set_fact:
+        k3s_cluster_token: "{{ k3s_token.content | b64decode | trim }}"
+      when: inventory_hostname in groups['k3s_init']
+
+    - name: Get primary master IP
+      ansible.builtin.set_fact:
+        primary_master_ip: "{{ hostvars[groups['k3s_init'][0]]['ansible_default_ipv4']['address'] }}"
+      when: inventory_hostname not in groups['k3s_init']
+
+    - name: Get token from primary master
+      ansible.builtin.set_fact:
+        k3s_cluster_token: "{{ hostvars[groups['k3s_init'][0]]['k3s_cluster_token'] }}"
+      when: inventory_hostname not in groups['k3s_init']
+
+    - name: Install additional k3s master nodes
+      ansible.builtin.shell: /tmp/k3s-install.sh
+      environment:
+        K3S_KUBECONFIG_MODE: "0644"
+        K3S_URL: "https://{{ primary_master_ip }}:6443"
+        K3S_TOKEN: "{{ k3s_cluster_token }}"
+        INSTALL_K3S_EXEC: "server --node-name={{ inventory_hostname }}"
+        INSTALL_K3S_SKIP_START: "true"
+      register: k3s_join_install
+      when:
+        - inventory_hostname not in groups['k3s_init']
+        - k3s_service_status.status.ActiveState is not defined or k3s_service_status.status.ActiveState not in ["active", "activating"]
+
+    - name: Configure proxy in k3s service env (join)
+      ansible.builtin.lineinfile:
+        path: /etc/systemd/system/k3s.service.env
+        regexp: "{{ item.regexp }}"
+        line: "{{ item.line }}"
+      loop:
+        - { regexp: '^HTTP_PROXY=', line: 'HTTP_PROXY="http://127.0.0.1:3128"' }
+        - { regexp: '^HTTPS_PROXY=', line: 'HTTPS_PROXY="http://127.0.0.1:3128"' }
+        - { regexp: '^NO_PROXY=', line: 'NO_PROXY="localhost,127.0.0.1,::1,192.168.10.0/24,10.42.0.0/16,10.43.0.0/16,.svc,.cluster.local"' }
+      when:
+        - inventory_hostname not in groups['k3s_init']
+        - k3s_join_install is changed
+
+    - name: Start k3s join node
+      ansible.builtin.systemd:
+        name: k3s
+        state: started
+        daemon_reload: yes
+      when:
+        - inventory_hostname not in groups['k3s_init']
+        - k3s_join_install is changed
+
+    - name: Wait for k3s service to be active
+      ansible.builtin.systemd:
+        name: k3s
+      register: k3s_join_check
+      retries: 30
+      delay: 5
+      until: k3s_join_check.status.ActiveState == "active"
+      when: inventory_hostname not in groups['k3s_init']
